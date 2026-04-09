@@ -16,6 +16,7 @@
   "build": {
     "appId": "id.uqd.examuq.client",
     "productName": "ExamUQ Client",
+    "compression": "maximum",
     "files": [
       "main.js",
       "preload.js",

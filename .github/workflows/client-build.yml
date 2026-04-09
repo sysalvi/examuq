@@ -42,10 +42,33 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npm run dist
 
-      - name: Upload artifact
+      - name: Upload macOS artifact
+        if: matrix.os == 'macos-latest'
         uses: actions/upload-artifact@v4
         with:
-          name: examuq-client-${{ matrix.os }}
-          path: client/dist/**
+          name: examuq-client-macos-latest
+          path: client/dist/*-mac.zip
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload Windows artifact
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: examuq-client-windows-latest
+          path: |
+            client/dist/*.exe
+            client/dist/*-win*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload Linux artifact
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: examuq-client-ubuntu-latest
+          path: |
+            client/dist/*.AppImage
+            client/dist/*-linux*.zip
           if-no-files-found: error
           retention-days: 7
