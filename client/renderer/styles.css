@@ -1,0 +1,135 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background:
+    radial-gradient(90vw 90vw at 15% -10%, #22d3ee33 0%, transparent 58%),
+    radial-gradient(80vw 80vw at 100% 0%, #a78bfa33 0%, transparent 60%),
+    linear-gradient(140deg, #0f172a 0%, #111827 48%, #1e1b4b 100%);
+  color: #e2e8f0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.shell {
+  width: 100%;
+  max-width: 520px;
+}
+
+.card {
+  border: 1px solid #334155;
+  border-radius: 18px;
+  background: #111827e6;
+  padding: 24px;
+  box-shadow: 0 18px 45px #02061766;
+}
+
+.badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 5px 10px;
+  background: #67e8f9;
+  color: #083344;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+}
+
+h1 {
+  margin: 10px 0 8px;
+  font-size: 30px;
+  line-height: 1.1;
+}
+
+.subtitle {
+  margin: 0 0 16px;
+  color: #cbd5e1;
+  line-height: 1.45;
+  font-size: 14px;
+}
+
+.form {
+  display: grid;
+  gap: 12px;
+}
+
+.label {
+  font-size: 13px;
+  font-weight: 700;
+  color: #e2e8f0;
+}
+
+input {
+  width: 100%;
+  border: 1px solid #475569;
+  border-radius: 12px;
+  background: #0b1227;
+  color: #f8fafc;
+  padding: 11px 13px;
+  font-size: 14px;
+  outline: none;
+}
+
+input:focus {
+  border-color: #22d3ee;
+  box-shadow: 0 0 0 3px #22d3ee33;
+}
+
+.device-box {
+  border: 1px solid #334155;
+  border-radius: 12px;
+  background: #0b1227;
+  padding: 10px 12px;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.device-box code {
+  color: #67e8f9;
+  font-weight: 700;
+}
+
+.btn {
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  padding: 11px 14px;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.btn.primary {
+  background: linear-gradient(135deg, #0d9488 0%, #06b6d4 100%);
+  color: #ffffff;
+  border-color: #14b8a6;
+}
+
+.btn.ghost {
+  background: #0b1227;
+  color: #bae6fd;
+  border-color: #334155;
+}
+
+.btn:hover {
+  filter: brightness(1.06);
+}
+
+.feedback {
+  min-height: 20px;
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: #bae6fd;
+}
+
+.feedback.error {
+  color: #fda4af;
+}

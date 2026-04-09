@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+
+# Env / secrets
+**/.env
+**/.env.*
+!**/.env.example
+
+# Dependencies
+**/node_modules/
+admin/vendor/
+
+# Build outputs
+client/dist/
+extension/*.zip
+
+# Runtime / cache
+admin/storage/*.key
+admin/storage/logs/*.log
+admin/bootstrap/cache/*.php
+*.log

@@ -1,0 +1,47 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+.popup {
+  width: 280px;
+  padding: 16px;
+}
+
+.title {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.status {
+  margin: 0 0 12px;
+  font-size: 14px;
+}
+
+.toggle {
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  color: #ffffff;
+  background: #16a34a;
+}
+
+.toggle.is-on {
+  background: #b91c1c;
+}
+
+.note {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: #334155;
+}

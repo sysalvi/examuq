@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ExamUQ Client Launcher</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="shell" role="main" aria-labelledby="title">
+    <section class="card">
+      <span class="badge">EXAMUQ CLIENT</span>
+      <h1 id="title">Connect to Exam Server</h1>
+      <p class="subtitle">Set alamat server ujian, lalu buka portal siswa langsung dari aplikasi.</p>
+
+      <form id="launcherForm" class="form" novalidate>
+        <label class="label" for="serverBaseUrl">Server Base URL</label>
+        <input
+          id="serverBaseUrl"
+          name="serverBaseUrl"
+          type="text"
+          required
+          placeholder="http://10.10.20.2:5555"
+          autocomplete="off"
+        >
+
+        <div class="device-box">
+          <span>Device ID</span>
+          <code id="deviceId">...</code>
+        </div>
+
+        <button id="openPortalButton" type="submit" class="btn primary">Open Student Portal</button>
+        <button id="openAdminButton" type="button" class="btn ghost">Open Admin in Browser</button>
+      </form>
+
+      <p id="feedback" class="feedback" aria-live="polite"></p>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

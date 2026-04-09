@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "ExamUQ Guard",
+  "version": "0.1.0",
+  "description": "ExamUQ browser guard for controlled exam access.",
+  "permissions": [
+    "storage",
+    "tabs",
+    "activeTab",
+    "commands",
+    "declarativeNetRequest",
+    "declarativeNetRequestWithHostAccess"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "ExamUQ Guard",
+    "default_popup": "popup.html"
+  },
+  "commands": {
+    "silent-disable": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+H",
+        "mac": "Command+Shift+H"
+      },
+      "description": "Silent disable ExamUQ Guard"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start"
+    }
+  ]
+}
