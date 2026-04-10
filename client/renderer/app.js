@@ -5,7 +5,9 @@ const deviceIdElement = document.getElementById('deviceId');
 const openAdminButton = document.getElementById('openAdminButton');
 const startExamButton = document.getElementById('startExamButton');
 const activeServerElement = document.getElementById('activeServer');
-const secretExitHintElement = document.getElementById('secretExitHint');
+const openSettingsButton = document.getElementById('openSettingsButton');
+const closeSettingsButton = document.getElementById('closeSettingsButton');
+const settingsOverlay = document.getElementById('settingsOverlay');
 
 function setFeedback(message, isError = false) {
   feedback.textContent = message;
@@ -25,12 +27,14 @@ async function hydrateState() {
       deviceIdElement.textContent = state.deviceId;
     }
 
-    if (state?.secretExitHint) {
-      secretExitHintElement.textContent = `Shortcut keluar rahasia: ${state.secretExitHint}`;
-    }
   } catch {
     setFeedback('Failed to read launcher state.', true);
   }
+}
+
+function setSettingsOverlayVisible(visible) {
+  settingsOverlay.classList.toggle('show', visible);
+  settingsOverlay.setAttribute('aria-hidden', visible ? 'false' : 'true');
 }
 
 async function startExam() {
@@ -64,6 +68,7 @@ async function saveSettings(event) {
 
   activeServerElement.textContent = result.serverBaseUrl;
   setFeedback(`Server aktif: ${result.serverBaseUrl}`);
+  setSettingsOverlayVisible(false);
 }
 
 async function openAdmin() {
@@ -80,5 +85,12 @@ async function openAdmin() {
 settingsForm.addEventListener('submit', saveSettings);
 startExamButton.addEventListener('click', startExam);
 openAdminButton.addEventListener('click', openAdmin);
+openSettingsButton.addEventListener('click', () => setSettingsOverlayVisible(true));
+closeSettingsButton.addEventListener('click', () => setSettingsOverlayVisible(false));
+settingsOverlay.addEventListener('click', (event) => {
+  if (event.target === settingsOverlay) {
+    setSettingsOverlayVisible(false);
+  }
+});
 
 hydrateState();
