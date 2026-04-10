@@ -10,29 +10,40 @@
   <main class="shell" role="main" aria-labelledby="title">
     <section class="card">
       <span class="badge">EXAMUQ CLIENT</span>
-      <h1 id="title">Connect to Exam Server</h1>
-      <p class="subtitle">Set alamat server ujian, lalu buka portal siswa langsung dari aplikasi.</p>
+      <h1 id="title">Siap Mulai Ujian?</h1>
+      <p class="subtitle">Klik <strong>Mulai Ujian</strong> untuk membuka portal siswa dalam mode kiosk fullscreen.</p>
 
-      <form id="launcherForm" class="form" novalidate>
-        <label class="label" for="serverBaseUrl">Server Base URL</label>
-        <input
-          id="serverBaseUrl"
-          name="serverBaseUrl"
-          type="text"
-          required
-          placeholder="http://10.10.20.2:5555"
-          autocomplete="off"
-        >
+      <div class="device-box">
+        <span>Server Default</span>
+        <code id="activeServer">http://10.10.20.2:6996</code>
+      </div>
 
-        <div class="device-box">
-          <span>Device ID</span>
-          <code id="deviceId">...</code>
-        </div>
+      <div class="device-box">
+        <span>Device ID</span>
+        <code id="deviceId">...</code>
+      </div>
 
-        <button id="openPortalButton" type="submit" class="btn primary">Open Student Portal</button>
-        <button id="openAdminButton" type="button" class="btn ghost">Open Admin in Browser</button>
-      </form>
+      <button id="startExamButton" type="button" class="btn primary">Mulai Ujian</button>
 
+      <details class="settings" id="settingsPanel">
+        <summary>Pengaturan Server</summary>
+        <form id="settingsForm" class="form" novalidate>
+          <label class="label" for="serverBaseUrl">Server Base URL</label>
+          <input
+            id="serverBaseUrl"
+            name="serverBaseUrl"
+            type="text"
+            required
+            placeholder="http://10.10.20.2:6996"
+            autocomplete="off"
+          >
+
+          <button id="saveSettingsButton" type="submit" class="btn ghost">Simpan Pengaturan</button>
+          <button id="openAdminButton" type="button" class="btn ghost">Buka Admin di Browser</button>
+        </form>
+      </details>
+
+      <p class="hint" id="secretExitHint"></p>
       <p id="feedback" class="feedback" aria-live="polite"></p>
     </section>
   </main>

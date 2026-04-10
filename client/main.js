@@ -1,15 +1,19 @@
-const { app, BrowserWindow, ipcMain, session, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, session, shell, globalShortcut } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
 const APP_STATE_FILE = 'client-state.json';
+const DEFAULT_SERVER_BASE_URL = 'http://10.10.20.2:6996';
+const SHUTDOWN_ARM_WINDOW_MS = 5000;
 
 let launcherWindow = null;
 let portalWindow = null;
 let requestHeaderInterceptorAttached = false;
 let portalOrigin = null;
 let deviceIdCache = null;
+let forceClosePortalWindow = false;
+let shutdownArmTimestamp = 0;
 
 function getStatePath() {
   return path.join(app.getPath('userData'), APP_STATE_FILE);
@@ -47,6 +51,22 @@ function normalizeBaseUrl(rawValue) {
   return `${parsed.protocol}//${parsed.host}`;
 }
 
+function ensureClientState() {
+  const state = readState();
+  const normalizedBaseUrl = state.serverBaseUrl
+    ? normalizeBaseUrl(state.serverBaseUrl)
+    : DEFAULT_SERVER_BASE_URL;
+
+  const nextState = {
+    ...state,
+    serverBaseUrl: normalizedBaseUrl,
+  };
+
+  writeState(nextState);
+
+  return nextState;
+}
+
 function getDeviceId() {
   if (deviceIdCache) {
     return deviceIdCache;
@@ -65,6 +85,25 @@ function getDeviceId() {
   deviceIdCache = newDeviceId;
 
   return deviceIdCache;
+}
+
+function getCurrentServerBaseUrl() {
+  const state = ensureClientState();
+
+  return state.serverBaseUrl;
+}
+
+function setCurrentServerBaseUrl(rawValue) {
+  const normalizedBaseUrl = normalizeBaseUrl(rawValue);
+  const state = readState();
+
+  writeState({
+    ...state,
+    serverBaseUrl: normalizedBaseUrl,
+    deviceId: getDeviceId(),
+  });
+
+  return normalizedBaseUrl;
 }
 
 function registerHeaderInterceptor() {
@@ -102,25 +141,64 @@ function registerHeaderInterceptor() {
   requestHeaderInterceptorAttached = true;
 }
 
-function createLauncherWindow() {
-  launcherWindow = new BrowserWindow({
-    width: 540,
-    height: 620,
-    resizable: false,
-    title: 'ExamUQ Client Launcher',
-    autoHideMenuBar: true,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
-    },
-  });
+async function destroySessionBeforeClose(windowRef) {
+  if (!windowRef || windowRef.isDestroyed()) {
+    return;
+  }
 
-  launcherWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-  launcherWindow.on('closed', () => {
-    launcherWindow = null;
-  });
+  const script = `
+    (async () => {
+      const config = document.getElementById('playerConfig');
+      const sessionId = config?.dataset?.sessionId;
+
+      if (!sessionId) {
+        return { ok: false, reason: 'no_session' };
+      }
+
+      try {
+        await fetch('/api/v1/sessions/' + sessionId + '/end', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          body: JSON.stringify({ reason: 'client_secret_close' })
+        });
+
+        return { ok: true, sessionId };
+      } catch (error) {
+        return { ok: false, reason: String(error) };
+      }
+    })();
+  `;
+
+  try {
+    await windowRef.webContents.executeJavaScript(script, true);
+  } catch {
+  }
+}
+
+async function closePortalWindowSecurely() {
+  if (!portalWindow || portalWindow.isDestroyed()) {
+    return;
+  }
+
+  await destroySessionBeforeClose(portalWindow);
+
+  forceClosePortalWindow = true;
+
+  if (!portalWindow.isDestroyed()) {
+    portalWindow.setKiosk(false);
+    portalWindow.close();
+  }
+
+  forceClosePortalWindow = false;
+  shutdownArmTimestamp = 0;
+
+  if (launcherWindow && !launcherWindow.isDestroyed()) {
+    launcherWindow.show();
+    launcherWindow.focus();
+  }
 }
 
 function applyPortalGuards(windowRef, allowedOrigin) {
@@ -143,10 +221,6 @@ function applyPortalGuards(windowRef, allowedOrigin) {
     event.preventDefault();
   });
 
-  windowRef.webContents.on('new-window', (event) => {
-    event.preventDefault();
-  });
-
   windowRef.webContents.on('before-input-event', (event, input) => {
     const ctrlOrMeta = input.control || input.meta;
     const key = (input.key || '').toLowerCase();
@@ -155,27 +229,57 @@ function applyPortalGuards(windowRef, allowedOrigin) {
       return;
     }
 
-    if (key === 't' || key === 'n' || key === 'w') {
+    if (key === 't' || key === 'n' || key === 'w' || key === 'r') {
       event.preventDefault();
+    }
+  });
+
+  windowRef.on('close', (event) => {
+    if (!forceClosePortalWindow) {
+      event.preventDefault();
+    }
+  });
+
+  windowRef.on('leave-full-screen', () => {
+    if (!forceClosePortalWindow && !windowRef.isDestroyed()) {
+      windowRef.setKiosk(true);
     }
   });
 }
 
-function openPortalWindow(baseUrl) {
-  const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+function createLauncherWindow() {
+  launcherWindow = new BrowserWindow({
+    width: 540,
+    height: 560,
+    resizable: false,
+    title: 'ExamUQ Client Launcher',
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+
+  launcherWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  launcherWindow.on('closed', () => {
+    launcherWindow = null;
+  });
+}
+
+function openPortalWindow(serverBaseUrlInput) {
+  const normalizedBaseUrl = serverBaseUrlInput
+    ? setCurrentServerBaseUrl(serverBaseUrlInput)
+    : getCurrentServerBaseUrl();
+
   const origin = new URL(normalizedBaseUrl).origin;
   portalOrigin = origin;
 
   registerHeaderInterceptor();
 
-  const state = readState();
-  writeState({
-    ...state,
-    lastServerBaseUrl: normalizedBaseUrl,
-    deviceId: getDeviceId(),
-  });
-
   if (portalWindow && !portalWindow.isDestroyed()) {
+    portalWindow.setKiosk(true);
     portalWindow.loadURL(`${normalizedBaseUrl}/`);
     portalWindow.focus();
     return normalizedBaseUrl;
@@ -184,6 +288,8 @@ function openPortalWindow(baseUrl) {
   portalWindow = new BrowserWindow({
     width: 1280,
     height: 800,
+    kiosk: true,
+    fullscreen: true,
     autoHideMenuBar: true,
     title: 'ExamUQ Client',
     webPreferences: {
@@ -208,18 +314,51 @@ function openPortalWindow(baseUrl) {
   return normalizedBaseUrl;
 }
 
+function registerSecretShortcuts() {
+  globalShortcut.unregisterAll();
+
+  globalShortcut.register('CommandOrControl+Shift+C', () => {
+    shutdownArmTimestamp = Date.now();
+  });
+
+  globalShortcut.register('CommandOrControl+Shift+B', () => {
+    const elapsed = Date.now() - shutdownArmTimestamp;
+
+    if (elapsed >= 0 && elapsed <= SHUTDOWN_ARM_WINDOW_MS) {
+      void closePortalWindowSecurely();
+    }
+  });
+}
+
 ipcMain.handle('client:get-launcher-state', async () => {
-  const state = readState();
+  const state = ensureClientState();
 
   return {
-    lastServerBaseUrl: state.lastServerBaseUrl || '',
+    serverBaseUrl: state.serverBaseUrl,
     deviceId: getDeviceId(),
+    secretExitHint: 'Ctrl/Cmd+Shift+C lalu Ctrl/Cmd+Shift+B',
   };
 });
 
-ipcMain.handle('client:open-portal', async (_event, payload) => {
+ipcMain.handle('client:update-settings', async (_event, payload) => {
   try {
-    const normalizedBaseUrl = openPortalWindow(payload?.serverBaseUrl);
+    const normalizedBaseUrl = setCurrentServerBaseUrl(payload?.serverBaseUrl);
+
+    return {
+      ok: true,
+      serverBaseUrl: normalizedBaseUrl,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Gagal simpan pengaturan.',
+    };
+  }
+});
+
+ipcMain.handle('client:start-exam', async () => {
+  try {
+    const normalizedBaseUrl = openPortalWindow();
 
     return {
       ok: true,
@@ -233,9 +372,9 @@ ipcMain.handle('client:open-portal', async (_event, payload) => {
   }
 });
 
-ipcMain.handle('client:open-admin', async (_event, payload) => {
+ipcMain.handle('client:open-admin', async () => {
   try {
-    const normalizedBaseUrl = normalizeBaseUrl(payload?.serverBaseUrl);
+    const normalizedBaseUrl = getCurrentServerBaseUrl();
     await shell.openExternal(`${normalizedBaseUrl}/admin`);
 
     return { ok: true };
@@ -248,7 +387,9 @@ ipcMain.handle('client:open-admin', async (_event, payload) => {
 });
 
 app.whenReady().then(() => {
+  ensureClientState();
   createLauncherWindow();
+  registerSecretShortcuts();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -261,4 +402,8 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
 });
