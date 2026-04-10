@@ -15,12 +15,12 @@
             font-family: "Nunito", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
             color: #f8fafc;
             background:
-                radial-gradient(90vw 90vw at 10% -10%, #22d3ee44 0%, transparent 60%),
-                radial-gradient(80vw 80vw at 100% 0%, #c084fc33 0%, transparent 58%),
-                linear-gradient(140deg, #0f172a 0%, #111827 45%, #1e1b4b 100%);
+                radial-gradient(90vw 90vw at 12% -10%, #fd781844 0%, transparent 60%),
+                radial-gradient(85vw 85vw at 100% 0%, #9e236f44 0%, transparent 58%),
+                linear-gradient(140deg, #140c18 0%, #170e1c 45%, #221027 100%);
             display: grid;
             place-items: center;
-            padding: 20px;
+            padding: 28px;
         }
 
         .wrap {
@@ -31,45 +31,45 @@
         .steps {
             display: grid;
             grid-template-columns: repeat(3, minmax(0, 1fr));
-            gap: 8px;
-            margin-bottom: 12px;
+            gap: 12px;
+            margin-bottom: 18px;
         }
 
         .step {
-            border: 1px solid #334155;
+            border: 1px solid #5d2e4f;
             border-radius: 999px;
             text-align: center;
-            padding: 7px 10px;
+            padding: 9px 12px;
             font-size: 12px;
-            background: #0b1227;
-            color: #cbd5e1;
+            background: #1c0f25;
+            color: #dec9e5;
         }
 
         .step.active {
-            border-color: #22d3ee;
-            color: #67e8f9;
-            background: #083344;
+            border-color: #fd7818;
+            color: #fff0e6;
+            background: linear-gradient(135deg, #fd7818 0%, #9e236f 100%);
         }
 
         .card {
-            border: 1px solid #334155;
+            border: 1px solid #6a3a5e;
             border-radius: 18px;
-            padding: 24px;
-            background: #0f172ae8;
-            box-shadow: 0 18px 45px #02061766;
+            padding: 30px;
+            background: #1a1024f0;
+            box-shadow: 0 18px 45px #09030e88;
             animation: cardEntrance 360ms ease-out;
         }
 
         .badge {
             display: inline-block;
-            margin-bottom: 10px;
+            margin-bottom: 14px;
             border-radius: 999px;
-            padding: 5px 10px;
+            padding: 6px 12px;
             font-size: 12px;
-            font-weight: 800;
+            font-weight: 900;
             letter-spacing: 0.3px;
-            color: #022c22;
-            background: #86efac;
+            color: #2c1204;
+            background: linear-gradient(135deg, #fd7818 0%, #ff9d5a 100%);
             animation: badgePulse 2200ms ease-in-out infinite;
         }
 
@@ -89,12 +89,12 @@
             width: 38px;
             height: 38px;
             border-radius: 10px;
-            border: 1px solid #22d3ee77;
-            background: #083344;
+            border: 1px solid #fd781877;
+            background: #3f1b2b;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            color: #67e8f9;
+            color: #ffd2b4;
             flex-shrink: 0;
             animation: iconFloat 2.4s ease-in-out infinite;
         }
@@ -105,20 +105,20 @@
         }
 
         .subtitle {
-            margin: 0 0 20px;
-            color: #cbd5e1;
+            margin: 0 0 24px;
+            color: #e7d9ee;
             line-height: 1.45;
-            font-size: 14px;
+            font-size: 16px;
         }
 
         form {
             display: grid;
-            gap: 12px;
+            gap: 16px;
         }
 
         .field {
             display: grid;
-            gap: 6px;
+            gap: 8px;
             animation: fieldRise 300ms ease-out both;
         }
 
@@ -135,41 +135,41 @@
         }
 
         label {
-            font-size: 13px;
+            font-size: 14px;
             font-weight: 800;
-            color: #e2e8f0;
+            color: #f8ecff;
         }
 
         input {
             width: 100%;
-            border: 1px solid #475569;
-            border-radius: 12px;
-            background: #0b1227;
-            color: #f8fafc;
-            padding: 12px 14px;
-            font-size: 14px;
+            border: 1px solid #6a3a5e;
+            border-radius: 14px;
+            background: #1b0f24;
+            color: #fff5fc;
+            padding: 13px 15px;
+            font-size: 16px;
             outline: none;
         }
 
         input:focus {
-            border-color: #22d3ee;
-            box-shadow: 0 0 0 3px #22d3ee33;
+            border-color: #fd7818;
+            box-shadow: 0 0 0 3px #fd781833;
         }
 
         .error {
             margin: 0;
             font-size: 12px;
-            color: #fda4af;
+            color: #ffc4d6;
         }
 
         .cta {
             margin-top: 4px;
-            border: 1px solid #14b8a6;
-            border-radius: 12px;
-            background: linear-gradient(135deg, #0d9488 0%, #06b6d4 100%);
+            border: 1px solid #fd9848;
+            border-radius: 14px;
+            background: linear-gradient(135deg, #fd7818 0%, #9e236f 100%);
             color: #f8fafc;
-            padding: 12px 14px;
-            font-size: 15px;
+            padding: 14px 16px;
+            font-size: 18px;
             font-weight: 900;
             cursor: pointer;
             transition: transform 120ms ease, filter 120ms ease;
@@ -186,29 +186,13 @@
         }
 
         .cta:focus-visible {
-            outline: 3px solid #22d3ee77;
+            outline: 3px solid #fd781855;
             outline-offset: 1px;
-        }
-
-        .meta {
-            margin-top: 14px;
-            display: flex;
-            justify-content: space-between;
-            gap: 10px;
-            flex-wrap: wrap;
-            font-size: 12px;
-            color: #94a3b8;
-        }
-
-        .meta a {
-            color: #67e8f9;
-            font-weight: 700;
-            text-decoration: underline;
         }
 
         @media (max-width: 640px) {
             .card {
-                padding: 18px;
+                padding: 22px;
                 border-radius: 14px;
             }
 
@@ -316,11 +300,6 @@
 
             <button class="cta" type="submit">Lanjut Konfirmasi</button>
         </form>
-
-        <div class="meta">
-            <span>Akses khusus lewat ExamUQ Client / Extension</span>
-            <span>Admin? <a href="/admin">Masuk di sini</a></span>
-        </div>
     </main>
 </div>
 </body>
