@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ExamUQ Client Tauri</title>
+    <script type="module" src="/main.js" defer></script>
+  </head>
+
+  <body>
+    <main class="shell" role="main" aria-labelledby="title">
+      <section class="card">
+        <span class="badge">EXAMUQ CLIENT TAURI</span>
+        <h1 id="title">Siap Mulai Ujian?</h1>
+        <p class="subtitle">Klik <strong>Mulai Ujian</strong> untuk membuka portal siswa dalam mode fullscreen.</p>
+
+        <div class="device-box">
+          <span>Server Default</span>
+          <code id="activeServer">http://10.10.20.2:6996</code>
+        </div>
+
+        <div class="device-box">
+          <span>Device ID</span>
+          <code id="deviceId">...</code>
+        </div>
+
+        <div class="actions">
+          <button id="startExamButton" type="button" class="btn primary">Mulai Ujian</button>
+          <button id="openSettingsButton" type="button" class="btn ghost">Pengaturan</button>
+        </div>
+
+        <p id="feedback" class="feedback" aria-live="polite"></p>
+      </section>
+    </main>
+
+    <section id="settingsOverlay" class="overlay" aria-hidden="true">
+      <div class="overlay-card" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+        <div class="overlay-head">
+          <h2 id="settingsTitle">Pengaturan Server</h2>
+          <button id="closeSettingsButton" type="button" class="icon-btn" aria-label="Tutup Pengaturan">✕</button>
+        </div>
+
+        <form id="settingsForm" class="form" novalidate>
+          <label class="label" for="serverBaseUrl">Server Base URL</label>
+          <input
+            id="serverBaseUrl"
+            name="serverBaseUrl"
+            type="text"
+            required
+            placeholder="http://10.10.20.2:6996"
+            autocomplete="off"
+          />
+
+          <button id="saveSettingsButton" type="submit" class="btn primary">Simpan Pengaturan</button>
+          <button id="openAdminButton" type="button" class="btn ghost">Buka Admin</button>
+        </form>
+      </div>
+    </section>
+  </body>
+</html>
