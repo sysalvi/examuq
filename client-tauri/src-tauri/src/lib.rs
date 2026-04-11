@@ -7,7 +7,8 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
-    AppHandle, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+    AppHandle, Manager, RunEvent, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    WindowEvent,
 };
 use url::Url;
 
@@ -32,7 +33,19 @@ const EXAM_WINDOW_INIT_SCRIPT: &str = r#"
     const ctrlOrMeta = event.ctrlKey || event.metaKey;
     const key = (event.key || '').toLowerCase();
 
-    if (ctrlOrMeta && ['t', 'n', 'w', 'r'].includes(key)) {
+    if (ctrlOrMeta && ['t', 'n', 'w', 'r', 'm', 'q'].includes(key)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+
+    if (event.altKey && key === 'f4') {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+
+    if (key === 'f11') {
       event.preventDefault();
       event.stopImmediatePropagation();
       return;
@@ -183,9 +196,21 @@ fn ensure_exam_window_kiosk(window: &WebviewWindow) {
     let _ = window.set_fullscreen(true);
     let _ = window.set_decorations(false);
     let _ = window.set_resizable(false);
+    let _ = window.set_closable(false);
+    let _ = window.set_minimizable(false);
+    let _ = window.set_maximizable(false);
     let _ = window.set_always_on_top(true);
+    let _ = window.unminimize();
     let _ = window.show();
     let _ = window.set_focus();
+}
+
+fn exam_window_is_locked(state: &RuntimeState) -> bool {
+    state
+        .allow_exam_close
+        .lock()
+        .map(|allow| !*allow)
+        .unwrap_or(true)
 }
 
 fn hide_main_window(app: &AppHandle) {
@@ -278,6 +303,9 @@ async fn close_exam_window_with_session_end(
         *allow_close = true;
     }
 
+    let _ = exam_window.set_closable(true);
+    let _ = exam_window.set_minimizable(true);
+    let _ = exam_window.set_maximizable(true);
     let _ = exam_window.set_always_on_top(false);
     let _ = exam_window.set_fullscreen(false);
     let _ = exam_window.set_decorations(true);
@@ -372,7 +400,7 @@ async fn start_exam(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let mut loaded = load_client_state(&app.handle());
@@ -410,7 +438,13 @@ pub fn run() {
             }
 
             if let WindowEvent::Focused(false) = event {
-                let _ = window.set_always_on_top(true);
+                if let Some(state) = window.try_state::<RuntimeState>() {
+                    if exam_window_is_locked(&state) {
+                        if let Some(exam_window) = window.app_handle().get_webview_window(EXAM_WINDOW_LABEL) {
+                            ensure_exam_window_kiosk(&exam_window);
+                        }
+                    }
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -421,6 +455,23 @@ pub fn run() {
             arm_secret_exit,
             execute_secret_exit,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle: &AppHandle, event| {
+        if let RunEvent::ExitRequested { api, .. } = event {
+            let Some(state) = app_handle.try_state::<RuntimeState>() else {
+                return;
+            };
+
+            if !exam_window_is_locked(&state) {
+                return;
+            }
+
+            if let Some(exam_window) = app_handle.get_webview_window(EXAM_WINDOW_LABEL) {
+                api.prevent_exit();
+                ensure_exam_window_kiosk(&exam_window);
+            }
+        }
+    });
 }
