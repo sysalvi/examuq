@@ -15,12 +15,19 @@ use tauri::{
 #[cfg(target_os = "macos")]
 use tauri::ActivationPolicy;
 use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
+use tauri_plugin_updater::UpdaterExt;
 use url::Url;
 
 const DEFAULT_SERVER_BASE_URL: &str = "http://10.10.20.2:6996";
 const STATE_FILE_NAME: &str = "client-state.json";
 const EXAM_WINDOW_LABEL: &str = "main";
 const END_SESSION_EVAL_DELAY_MS: u64 = 260;
+const DEFAULT_UPDATE_CHANNEL: &str = "stable";
+const DEFAULT_UPDATE_ENDPOINT_TEMPLATE: &str =
+    "https://updates.examuq.id/{{target}}/{{arch}}/{{current_version}}?channel={channel}";
+const BUILD_TIME_UPDATE_CHANNEL: Option<&str> = option_env!("EXAMUQ_UPDATE_CHANNEL");
+const BUILD_TIME_ALLOW_BETA: Option<&str> = option_env!("EXAMUQ_ALLOW_BETA");
+const BUILD_TIME_UPDATE_ENDPOINT_TEMPLATE: Option<&str> = option_env!("EXAMUQ_UPDATER_ENDPOINT_TEMPLATE");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,6 +54,21 @@ struct StartExamResponse {
 struct RuntimeState {
     client_state: Mutex<ClientState>,
     allow_exam_close: Mutex<bool>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdaterChannelInfo {
+    channel: String,
+    endpoint: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InstallUpdateResult {
+    updated: bool,
+    version: Option<String>,
+    channel: String,
 }
 
 fn normalize_base_url(raw: &str) -> Result<String, String> {
@@ -153,6 +175,125 @@ fn current_state_payload(state: &RuntimeState) -> LauncherStateResponse {
         server_base_url: guard.server_base_url.clone(),
         device_id: guard.device_id.clone(),
     }
+}
+
+fn selected_update_channel() -> String {
+    let allow_beta = BUILD_TIME_ALLOW_BETA
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            normalized == "1" || normalized == "true" || normalized == "yes"
+        })
+        .unwrap_or(false);
+
+    let raw = BUILD_TIME_UPDATE_CHANNEL
+        .unwrap_or(DEFAULT_UPDATE_CHANNEL)
+        .to_string();
+    let normalized = raw.trim().to_ascii_lowercase();
+
+    if normalized == "beta" && !allow_beta {
+        return DEFAULT_UPDATE_CHANNEL.to_string();
+    }
+
+    match normalized.as_str() {
+        "stable" | "beta" => normalized,
+        _ => DEFAULT_UPDATE_CHANNEL.to_string(),
+    }
+}
+
+fn updater_endpoint_for_channel(channel: &str) -> String {
+    let template = BUILD_TIME_UPDATE_ENDPOINT_TEMPLATE
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_UPDATE_ENDPOINT_TEMPLATE.to_string());
+
+    template.replace("{channel}", channel)
+}
+
+fn validate_updater_endpoint(endpoint: &Url) -> Result<(), String> {
+    if endpoint.scheme() != "https" {
+        return Err("Updater endpoint wajib menggunakan HTTPS.".to_string());
+    }
+
+    if endpoint.host_str().unwrap_or_default().is_empty() {
+        return Err("Updater endpoint wajib memiliki host yang valid.".to_string());
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn get_updater_channel_info() -> UpdaterChannelInfo {
+    let channel = selected_update_channel();
+    let endpoint = updater_endpoint_for_channel(&channel);
+
+    UpdaterChannelInfo { channel, endpoint }
+}
+
+#[tauri::command]
+async fn check_for_updates(app: AppHandle) -> Result<Option<String>, String> {
+    let channel = selected_update_channel();
+    let endpoint = updater_endpoint_for_channel(&channel);
+
+    let update_url = Url::parse(&endpoint)
+        .map_err(|e| format!("Updater endpoint tidak valid untuk channel {channel}: {e}"))?;
+    validate_updater_endpoint(&update_url)?;
+
+    let update = app
+        .updater_builder()
+        .endpoints(vec![update_url])
+        .map_err(|e| format!("Gagal set updater endpoint: {e}"))?
+        .build()
+        .map_err(|e| format!("Gagal build updater: {e}"))?
+        .check()
+        .await
+        .map_err(|e| format!("Gagal check update: {e}"))?;
+
+    Ok(update.map(|item| item.version))
+}
+
+#[tauri::command]
+async fn install_available_update(app: AppHandle) -> Result<InstallUpdateResult, String> {
+    let channel = selected_update_channel();
+    let endpoint = updater_endpoint_for_channel(&channel);
+
+    let update_url = Url::parse(&endpoint)
+        .map_err(|e| format!("Updater endpoint tidak valid untuk channel {channel}: {e}"))?;
+    validate_updater_endpoint(&update_url)?;
+
+    let updater = app
+        .updater_builder()
+        .endpoints(vec![update_url])
+        .map_err(|e| format!("Gagal set updater endpoint: {e}"))?
+        .build()
+        .map_err(|e| format!("Gagal build updater: {e}"))?;
+
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| format!("Gagal check update: {e}"))?;
+
+    let Some(update) = update else {
+        return Ok(InstallUpdateResult {
+            updated: false,
+            version: None,
+            channel,
+        });
+    };
+
+    let target_version = update.version.clone();
+
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|e| format!("Gagal download/install update: {e}"))?;
+
+    app.request_restart();
+
+    Ok(InstallUpdateResult {
+        updated: true,
+        version: Some(target_version),
+        channel,
+    })
 }
 
 fn ensure_exam_window_kiosk(window: &WebviewWindow) {
@@ -479,6 +620,7 @@ async fn start_exam(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
+    builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
 
     let global_shortcut_plugin_builder = tauri_plugin_global_shortcut::Builder::new()
         .with_shortcut(Shortcut::new(
@@ -579,6 +721,9 @@ pub fn run() {
             open_exam_direct,
             finish_exam_session,
             execute_secret_exit,
+            get_updater_channel_info,
+            check_for_updates,
+            install_available_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

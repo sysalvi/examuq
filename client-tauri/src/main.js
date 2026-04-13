@@ -1,5 +1,7 @@
 const { invoke } = window.__TAURI__.core;
 
+const AUTO_CHECK_UPDATES = true;
+
 const settingsForm = document.getElementById('settingsForm');
 const serverBaseUrlInput = document.getElementById('serverBaseUrl');
 const feedback = document.getElementById('feedback');
@@ -94,18 +96,53 @@ async function finishExamSession() {
   cancelFinishButton.disabled = true;
   openFinishOverlayButton.disabled = true;
 
+  examFrame.src = 'about:blank';
+  setExamMode(false);
+  setFeedback('Mengakhiri sesi dan kembali ke halaman awal...');
+
+  void invoke('finish_exam_session')
+    .then(() => {
+      setFeedback('Sesi ujian diakhiri. Kembali ke halaman awal.');
+    })
+    .catch((error) => {
+      setFeedback(`Peringatan sinkronisasi sesi: ${String(error)}`, true);
+    })
+    .finally(() => {
+      confirmFinishButton.disabled = false;
+      cancelFinishButton.disabled = false;
+      openFinishOverlayButton.disabled = false;
+      setFinishOverlayVisible(false);
+    });
+}
+
+async function maybeCheckForUpdates() {
+  if (!AUTO_CHECK_UPDATES) {
+    return;
+  }
+
   try {
-    await invoke('finish_exam_session');
-    examFrame.src = 'about:blank';
-    setExamMode(false);
-    setFeedback('Sesi ujian diakhiri. Kembali ke halaman awal.');
+    const channelInfo = await invoke('get_updater_channel_info');
+    const latestVersion = await invoke('check_for_updates');
+
+    if (!latestVersion) {
+      return;
+    }
+
+    setFeedback(
+      `Update tersedia (${channelInfo.channel}) v${latestVersion}. Mengunduh dan memasang update...`,
+    );
+
+    const result = await invoke('install_available_update');
+    if (result?.updated) {
+      setFeedback(
+        `Update ${channelInfo.channel} v${result.version ?? latestVersion} terpasang. Aplikasi akan restart.`,
+      );
+      return;
+    }
+
+    setFeedback(`Update tersedia (${channelInfo.channel}) v${latestVersion}.`, true);
   } catch (error) {
-    setFeedback(`Gagal mengakhiri sesi: ${String(error)}`, true);
-  } finally {
-    confirmFinishButton.disabled = false;
-    cancelFinishButton.disabled = false;
-    openFinishOverlayButton.disabled = false;
-    setFinishOverlayVisible(false);
+    console.warn('Updater check gagal:', error);
   }
 }
 
@@ -217,3 +254,4 @@ examFrame.addEventListener('error', () => {
 });
 
 hydrateState();
+maybeCheckForUpdates();

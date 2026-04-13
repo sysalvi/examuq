@@ -5,11 +5,20 @@
   "type": "module",
   "scripts": {
     "dev": "tauri dev",
+    "dev:stable": "cross-env EXAMUQ_UPDATE_CHANNEL=stable EXAMUQ_ALLOW_BETA=false tauri dev",
+    "dev:beta": "cross-env EXAMUQ_UPDATE_CHANNEL=beta EXAMUQ_ALLOW_BETA=true tauri dev",
     "build": "tauri build",
+    "build:stable": "cross-env EXAMUQ_UPDATE_CHANNEL=stable EXAMUQ_ALLOW_BETA=false tauri build",
+    "build:beta": "cross-env EXAMUQ_UPDATE_CHANNEL=beta EXAMUQ_ALLOW_BETA=true tauri build",
     "lint": "node --check src/main.js",
     "tauri": "tauri"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2"
+    "@tauri-apps/cli": "^2",
+    "cross-env": "^7.0.3"
+  },
+  "dependencies": {
+    "@tauri-apps/plugin-process": "^2",
+    "@tauri-apps/plugin-updater": "^2"
   }
 }
