@@ -20,6 +20,7 @@ const finishOverlay = document.getElementById('finishOverlay');
 const openFinishOverlayButton = document.getElementById('openFinishOverlayButton');
 const cancelFinishButton = document.getElementById('cancelFinishButton');
 const confirmFinishButton = document.getElementById('confirmFinishButton');
+const appVersionElement = document.getElementById('appVersion');
 
 let frameLoadTimeout;
 let startExamInFlight = false;
@@ -31,6 +32,12 @@ function clearFrameTimers() {
 }
 
 function setFeedback(message, isError = false) {
+  if (!isError) {
+    feedback.textContent = '';
+    feedback.classList.remove('error');
+    return;
+  }
+
   feedback.textContent = message;
   feedback.classList.toggle('error', isError);
 }
@@ -101,9 +108,7 @@ async function finishExamSession() {
   setFeedback('Mengakhiri sesi dan kembali ke halaman awal...');
 
   void invoke('finish_exam_session')
-    .then(() => {
-      setFeedback('Sesi ujian diakhiri. Kembali ke halaman awal.');
-    })
+    .then(() => setFeedback(''))
     .catch((error) => {
       setFeedback(`Peringatan sinkronisasi sesi: ${String(error)}`, true);
     })
@@ -128,19 +133,19 @@ async function maybeCheckForUpdates() {
       return;
     }
 
-    setFeedback(
+    console.info(
       `Update tersedia (${channelInfo.channel}) v${latestVersion}. Mengunduh dan memasang update...`,
     );
 
     const result = await invoke('install_available_update');
     if (result?.updated) {
-      setFeedback(
+      console.info(
         `Update ${channelInfo.channel} v${result.version ?? latestVersion} terpasang. Aplikasi akan restart.`,
       );
       return;
     }
 
-    setFeedback(`Update tersedia (${channelInfo.channel}) v${latestVersion}.`, true);
+    console.warn(`Update tersedia (${channelInfo.channel}) v${latestVersion}, tetapi belum terpasang.`);
   } catch (error) {
     console.warn('Updater check gagal:', error);
   }
@@ -149,6 +154,10 @@ async function maybeCheckForUpdates() {
 async function hydrateState() {
   try {
     const state = await invoke('get_launcher_state');
+
+    if (state?.appVersion && appVersionElement) {
+      appVersionElement.textContent = `Versi aplikasi: ${state.appVersion}`;
+    }
 
     if (state?.serverBaseUrl) {
       serverBaseUrlInput.value = state.serverBaseUrl;
@@ -216,7 +225,7 @@ async function saveSettings(event) {
 async function openAdmin() {
   try {
     await invoke('open_admin');
-    setFeedback('Admin dibuka di browser default.');
+    setFeedback('');
   } catch (error) {
     setFeedback(`Gagal membuka admin: ${String(error)}`, true);
   }

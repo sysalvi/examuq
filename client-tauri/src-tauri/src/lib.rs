@@ -41,6 +41,7 @@ struct ClientState {
 struct LauncherStateResponse {
     server_base_url: String,
     device_id: String,
+    app_version: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -174,6 +175,7 @@ fn current_state_payload(state: &RuntimeState) -> LauncherStateResponse {
     LauncherStateResponse {
         server_base_url: guard.server_base_url.clone(),
         device_id: guard.device_id.clone(),
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
     }
 }
 
@@ -491,12 +493,6 @@ fn finish_exam_session(app: AppHandle, state: State<'_, RuntimeState>) -> Result
 
     restore_launcher_window(&main_window);
     apply_macos_exam_presentation_lock(&app, false);
-
-    #[cfg(target_os = "macos")]
-    {
-        let _ = app.set_activation_policy(ActivationPolicy::Regular);
-        let _ = app.set_dock_visibility(true);
-    }
 
     write_runtime_log(&app, "finish_exam_session invoked");
     Ok(())
