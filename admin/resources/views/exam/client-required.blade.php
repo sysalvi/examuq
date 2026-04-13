@@ -228,7 +228,13 @@
 
     retryButton.addEventListener('click', runLiveCheck);
     runLiveCheck();
-    window.setInterval(runLiveCheck, 2000);
+    window.setInterval(() => {
+        if (document.hidden) {
+            return;
+        }
+
+        runLiveCheck();
+    }, 8000);
 </script>
 </body>
 </html>

@@ -212,8 +212,8 @@
     let heartbeatInFlight = false;
 
     const FULLSCREEN_GRACE_MS = 6500;
-    const HEARTBEAT_BASE_MS = 45000;
-    const HEARTBEAT_JITTER_MS = 12000;
+    const HEARTBEAT_BASE_MS = 75000;
+    const HEARTBEAT_JITTER_MS = 20000;
 
     function showOverlay(message) {
         overlayMessageElement.textContent = message;

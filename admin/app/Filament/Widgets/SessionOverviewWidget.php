@@ -10,7 +10,7 @@ use Filament\Widgets\StatsOverviewWidget\Stat;
 
 class SessionOverviewWidget extends StatsOverviewWidget
 {
-    protected ?string $pollingInterval = '20s';
+    protected ?string $pollingInterval = '45s';
 
     protected function getStats(): array
     {
@@ -24,7 +24,7 @@ class SessionOverviewWidget extends StatsOverviewWidget
             ->where(function ($query) use ($now): void {
                 $query
                     ->whereNull('last_heartbeat_at')
-                    ->orWhere('last_heartbeat_at', '<=', $now->copy()->subMinutes(2));
+                    ->orWhere('last_heartbeat_at', '<=', $now->copy()->subMinutes(4));
             })
             ->count();
 

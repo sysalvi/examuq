@@ -62,7 +62,7 @@ class SessionController extends Controller
         $shouldPersist =
             ! $lastHeartbeatAt
             || $session->status !== 'active'
-            || $lastHeartbeatAt->diffInSeconds($now) >= 20;
+            || $lastHeartbeatAt->diffInSeconds($now) >= 90;
 
         if ($shouldPersist) {
             $session->update([
@@ -71,12 +71,7 @@ class SessionController extends Controller
             ]);
         }
 
-        return response()->json([
-            'message' => 'Heartbeat diterima.',
-            'session_id' => $session->id,
-            'persisted' => $shouldPersist,
-            'last_heartbeat_at' => ($shouldPersist ? $now : $lastHeartbeatAt)->toIso8601String(),
-        ]);
+        return response()->json(null, 204);
     }
 
     public function end(Request $request, int $sessionId): JsonResponse

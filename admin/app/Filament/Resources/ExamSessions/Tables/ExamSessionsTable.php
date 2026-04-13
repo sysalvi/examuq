@@ -15,7 +15,7 @@ class ExamSessionsTable
     public static function configure(Table $table): Table
     {
         return $table
-            ->poll('20s')
+            ->poll('45s')
             ->modifyQueryUsing(function (Builder $query): Builder {
                 $examId = request()->integer('exam_id');
 
