@@ -41,7 +41,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ1MkRFNDk4MTFGODhGRDcKUldUWGovZ1JtT1F0UlNjcFV0UURnYnZpUnNwTU5PdnUvbllCeGdmSGY2UVNVVFZnalJNdlNia1AK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhFRjI3OUVDNEU3RkE2NkQKUldSdHBuOU83SG55anJQK2NEYnpvOUlhNUhzWCtKdE44UWs2SS9wRXZ0Q0dBSWFFQk1ReXMxancK",
       "endpoints": [
         "https://updates.examuq.id/{{target}}/{{arch}}/{{current_version}}?channel=stable"
       ],
