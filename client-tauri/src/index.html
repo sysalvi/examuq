@@ -9,7 +9,7 @@
   </head>
 
   <body>
-    <main class="shell" role="main" aria-labelledby="title">
+    <main id="launcherShell" class="shell" role="main" aria-labelledby="title">
       <section class="card">
         <span class="badge">EXAMUQ CLIENT TAURI</span>
         <h1 id="title">Siap Mulai Ujian?</h1>
@@ -33,6 +33,23 @@
         <p id="feedback" class="feedback" aria-live="polite"></p>
       </section>
     </main>
+
+    <section id="examShell" class="exam-shell" aria-hidden="true">
+      <div id="examLoading" class="exam-loading" aria-live="polite">Memuat portal ujian...</div>
+      <button id="openFinishOverlayButton" type="button" class="exam-finish-trigger">Selesai Ujian</button>
+      <iframe id="examFrame" class="exam-frame" title="Portal Ujian"></iframe>
+
+      <div id="finishOverlay" class="finish-overlay" aria-hidden="true">
+        <div class="finish-card" role="dialog" aria-modal="true" aria-labelledby="finishTitle">
+          <h3 id="finishTitle">Akhiri Sesi Ujian?</h3>
+          <p>Pastikan kamu sudah benar-benar selesai. Setelah diakhiri, kamu akan kembali ke halaman awal.</p>
+          <div class="finish-actions">
+            <button id="cancelFinishButton" type="button" class="btn ghost">Batal</button>
+            <button id="confirmFinishButton" type="button" class="btn primary">Ya, Akhiri Sesi</button>
+          </div>
+        </div>
+      </div>
+    </section>
 
     <section id="settingsOverlay" class="overlay" aria-hidden="true">
       <div class="overlay-card" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">

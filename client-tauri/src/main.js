@@ -10,6 +10,23 @@ const activeServerElement = document.getElementById('activeServer');
 const openSettingsButton = document.getElementById('openSettingsButton');
 const closeSettingsButton = document.getElementById('closeSettingsButton');
 const settingsOverlay = document.getElementById('settingsOverlay');
+const launcherShell = document.getElementById('launcherShell');
+const examShell = document.getElementById('examShell');
+const examFrame = document.getElementById('examFrame');
+const examLoading = document.getElementById('examLoading');
+const finishOverlay = document.getElementById('finishOverlay');
+const openFinishOverlayButton = document.getElementById('openFinishOverlayButton');
+const cancelFinishButton = document.getElementById('cancelFinishButton');
+const confirmFinishButton = document.getElementById('confirmFinishButton');
+
+let frameLoadTimeout;
+let startExamInFlight = false;
+let frameLoaded = false;
+const FRAME_LOAD_TIMEOUT_MS = 10000;
+
+function clearFrameTimers() {
+  clearTimeout(frameLoadTimeout);
+}
 
 function setFeedback(message, isError = false) {
   feedback.textContent = message;
@@ -19,6 +36,77 @@ function setFeedback(message, isError = false) {
 function setSettingsOverlayVisible(visible) {
   settingsOverlay.classList.toggle('show', visible);
   settingsOverlay.setAttribute('aria-hidden', visible ? 'false' : 'true');
+}
+
+function setExamMode(active) {
+  launcherShell.classList.toggle('hidden', active);
+  examShell.classList.toggle('show', active);
+  examShell.setAttribute('aria-hidden', active ? 'false' : 'true');
+
+  if (!active) {
+    setFinishOverlayVisible(false);
+  }
+
+  if (active) {
+    setSettingsOverlayVisible(false);
+  }
+}
+
+function setFinishOverlayVisible(visible) {
+  finishOverlay.classList.toggle('show', visible);
+  finishOverlay.setAttribute('aria-hidden', visible ? 'false' : 'true');
+}
+
+function buildLaunchUrl(serverBaseUrl) {
+  try {
+    return new URL('/', serverBaseUrl).toString();
+  } catch {
+    return `${serverBaseUrl.replace(/\/+$/, '')}/`;
+  }
+}
+
+function beginExamFrameLoading() {
+  clearFrameTimers();
+  frameLoaded = false;
+  examLoading.textContent = 'Memuat portal ujian...';
+  examLoading.classList.add('show');
+
+  frameLoadTimeout = setTimeout(() => {
+    examLoading.textContent = 'Portal belum merespons. Periksa URL server.';
+    examLoading.classList.add('show');
+  }, FRAME_LOAD_TIMEOUT_MS);
+}
+
+function finishExamFrameLoading(success) {
+  clearFrameTimers();
+
+  if (success) {
+    examLoading.classList.remove('show');
+    return;
+  }
+
+  examLoading.textContent = 'Gagal memuat portal ujian.';
+  examLoading.classList.add('show');
+}
+
+async function finishExamSession() {
+  confirmFinishButton.disabled = true;
+  cancelFinishButton.disabled = true;
+  openFinishOverlayButton.disabled = true;
+
+  try {
+    await invoke('finish_exam_session');
+    examFrame.src = 'about:blank';
+    setExamMode(false);
+    setFeedback('Sesi ujian diakhiri. Kembali ke halaman awal.');
+  } catch (error) {
+    setFeedback(`Gagal mengakhiri sesi: ${String(error)}`, true);
+  } finally {
+    confirmFinishButton.disabled = false;
+    cancelFinishButton.disabled = false;
+    openFinishOverlayButton.disabled = false;
+    setFinishOverlayVisible(false);
+  }
 }
 
 async function hydrateState() {
@@ -39,6 +127,12 @@ async function hydrateState() {
 }
 
 async function startExam() {
+  if (startExamInFlight) {
+    return;
+  }
+
+  startExamInFlight = true;
+  startExamButton.disabled = true;
   setFeedback('Membuka portal siswa...');
 
   try {
@@ -48,9 +142,18 @@ async function startExam() {
       return;
     }
 
-    setFeedback(`Portal dibuka: ${result.serverBaseUrl}`);
+    const launchUrl = buildLaunchUrl(result.serverBaseUrl);
+    setExamMode(true);
+    beginExamFrameLoading();
+
+    examFrame.src = launchUrl;
+
+    setFeedback(`Portal dibuka: ${launchUrl}`);
   } catch (error) {
     setFeedback(`Gagal membuka portal siswa: ${String(error)}`, true);
+  } finally {
+    startExamInFlight = false;
+    startExamButton.disabled = false;
   }
 }
 
@@ -92,6 +195,25 @@ settingsOverlay.addEventListener('click', (event) => {
   if (event.target === settingsOverlay) {
     setSettingsOverlayVisible(false);
   }
+});
+
+openFinishOverlayButton.addEventListener('click', () => setFinishOverlayVisible(true));
+cancelFinishButton.addEventListener('click', () => setFinishOverlayVisible(false));
+confirmFinishButton.addEventListener('click', finishExamSession);
+
+finishOverlay.addEventListener('click', (event) => {
+  if (event.target === finishOverlay) {
+    setFinishOverlayVisible(false);
+  }
+});
+
+examFrame.addEventListener('load', () => {
+  frameLoaded = true;
+  finishExamFrameLoading(true);
+});
+
+examFrame.addEventListener('error', () => {
+  finishExamFrameLoading(false);
 });
 
 hydrateState();

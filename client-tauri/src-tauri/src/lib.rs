@@ -1,86 +1,24 @@
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
+    io::Write,
     path::PathBuf,
-    thread,
     sync::Mutex,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
+#[cfg(target_os = "windows")]
+use std::process::Command;
 use tauri::{
-    AppHandle, Manager, RunEvent, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
-    WindowEvent,
+    ActivationPolicy, AppHandle, Manager, RunEvent, State, WebviewWindow, WindowEvent,
 };
+use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
 use url::Url;
 
 const DEFAULT_SERVER_BASE_URL: &str = "http://10.10.20.2:6996";
 const STATE_FILE_NAME: &str = "client-state.json";
-const EXAM_WINDOW_LABEL: &str = "exam";
-const SECRET_EXIT_WINDOW_MS: u64 = 5000;
+const EXAM_WINDOW_LABEL: &str = "main";
 const END_SESSION_EVAL_DELAY_MS: u64 = 260;
-
-const EXAM_WINDOW_INIT_SCRIPT: &str = r#"
-(() => {
-  const core = window.__TAURI__?.core;
-
-  const invokeSafe = (command) => {
-    if (!core?.invoke) return;
-    core.invoke(command).catch(() => {});
-  };
-
-  window.open = () => null;
-
-  window.addEventListener('keydown', (event) => {
-    const ctrlOrMeta = event.ctrlKey || event.metaKey;
-    const key = (event.key || '').toLowerCase();
-
-    if (ctrlOrMeta && ['t', 'n', 'w', 'r', 'm', 'q'].includes(key)) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      return;
-    }
-
-    if (event.altKey && key === 'f4') {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      return;
-    }
-
-    if (key === 'f11') {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      return;
-    }
-
-    if (!ctrlOrMeta || !event.shiftKey) {
-      return;
-    }
-
-    if (key === 'c') {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      invokeSafe('arm_secret_exit');
-      return;
-    }
-
-    if (key === 'b') {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      invokeSafe('execute_secret_exit');
-    }
-  }, true);
-
-  document.addEventListener('click', (event) => {
-    const target = event.target;
-    if (!(target instanceof Element)) return;
-
-    const anchor = target.closest('a[target="_blank"]');
-    if (!anchor) return;
-
-    event.preventDefault();
-    event.stopImmediatePropagation();
-  }, true);
-})();
-"#;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -107,7 +45,6 @@ struct StartExamResponse {
 struct RuntimeState {
     client_state: Mutex<ClientState>,
     allow_exam_close: Mutex<bool>,
-    secret_armed_at: Mutex<Option<Instant>>,
 }
 
 fn normalize_base_url(raw: &str) -> Result<String, String> {
@@ -119,17 +56,41 @@ fn normalize_base_url(raw: &str) -> Result<String, String> {
     let with_protocol = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
         trimmed.to_string()
     } else {
-        format!("http://{trimmed}")
+        let provisional = format!("http://{trimmed}");
+        let parsed = Url::parse(&provisional)
+            .map_err(|_| "Format URL server tidak valid. Contoh: http://10.10.20.2:6996")?;
+
+        let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
+
+        let should_use_http = host == "localhost"
+            || host.ends_with(".local")
+            || host.parse::<std::net::Ipv4Addr>().map_or(false, |ip| {
+                let [a, b, _, _] = ip.octets();
+                a == 10
+                    || a == 127
+                    || (a == 172 && (16..=31).contains(&b))
+                    || (a == 192 && b == 168)
+                    || (a == 169 && b == 254)
+            });
+
+        if should_use_http {
+            format!("http://{trimmed}")
+        } else {
+            format!("https://{trimmed}")
+        }
     };
 
     let parsed = Url::parse(&with_protocol)
         .map_err(|_| "Format URL server tidak valid. Contoh: http://10.10.20.2:6996")?;
 
-    Ok(format!("{}://{}", parsed.scheme(), parsed.host_str().unwrap_or_default())
-        + &parsed
-            .port()
-            .map(|port| format!(":{port}"))
-            .unwrap_or_default())
+    Ok(format!(
+        "{}://{}",
+        parsed.scheme(),
+        parsed.host_str().unwrap_or_default()
+    ) + &parsed
+        .port()
+        .map(|port| format!(":{port}"))
+        .unwrap_or_default())
 }
 
 fn generate_device_id() -> String {
@@ -177,8 +138,8 @@ fn load_client_state(app: &AppHandle) -> ClientState {
 
 fn persist_client_state(app: &AppHandle, state: &ClientState) -> Result<(), String> {
     let path = state_file_path(app)?;
-    let raw = serde_json::to_string_pretty(state)
-        .map_err(|e| format!("Gagal serialize state: {e}"))?;
+    let raw =
+        serde_json::to_string_pretty(state).map_err(|e| format!("Gagal serialize state: {e}"))?;
 
     fs::write(path, raw).map_err(|e| format!("Gagal simpan state: {e}"))
 }
@@ -193,7 +154,11 @@ fn current_state_payload(state: &RuntimeState) -> LauncherStateResponse {
 }
 
 fn ensure_exam_window_kiosk(window: &WebviewWindow) {
-    let _ = window.set_fullscreen(true);
+    if !matches!(window.is_fullscreen(), Ok(true)) {
+        let _ = window.set_fullscreen(true);
+    }
+    let _ = window.set_content_protected(false);
+    let _ = window.set_skip_taskbar(false);
     let _ = window.set_decorations(false);
     let _ = window.set_resizable(false);
     let _ = window.set_closable(false);
@@ -213,17 +178,83 @@ fn exam_window_is_locked(state: &RuntimeState) -> bool {
         .unwrap_or(true)
 }
 
-fn hide_main_window(app: &AppHandle) {
-    if let Some(main) = app.get_webview_window("main") {
-        let _ = main.hide();
+fn exam_kiosk_is_active(app: &AppHandle, state: &RuntimeState) -> bool {
+    exam_window_is_locked(state) && app.get_webview_window(EXAM_WINDOW_LABEL).is_some()
+}
+
+fn force_exit_now(app: &AppHandle) {
+    if let Some(state) = app.try_state::<RuntimeState>() {
+        if let Ok(mut allow_close) = state.allow_exam_close.lock() {
+            *allow_close = true;
+        }
+    }
+
+    apply_macos_exam_presentation_lock(app, false);
+    app.exit(0);
+}
+
+fn write_runtime_log(app: &AppHandle, message: &str) {
+    let Ok(mut path) = state_file_path(app) else {
+        return;
+    };
+
+    path.set_file_name("runtime.log");
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|dur| dur.as_millis())
+        .unwrap_or(0);
+
+    let line = format!("[{now}] {message}\n");
+
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = file.write_all(line.as_bytes());
     }
 }
 
-fn show_main_window(app: &AppHandle) {
-    if let Some(main) = app.get_webview_window("main") {
-        let _ = main.show();
-        let _ = main.set_focus();
+fn apply_macos_exam_presentation_lock(_app: &AppHandle, _lock: bool) {}
+
+fn activate_exam_kiosk(window: &WebviewWindow) {
+    if let Some(state) = window.try_state::<RuntimeState>() {
+        if let Ok(mut allow_close) = state.allow_exam_close.lock() {
+            *allow_close = false;
+        }
     }
+
+    ensure_exam_window_kiosk(window);
+
+    #[cfg(target_os = "windows")]
+    kill_windows_explorer();
+}
+
+fn restore_launcher_window(window: &WebviewWindow) {
+    let _ = window.set_always_on_top(false);
+    let _ = window.set_fullscreen(false);
+    let _ = window.set_decorations(true);
+    let _ = window.set_resizable(false);
+    let _ = window.set_closable(true);
+    let _ = window.set_minimizable(true);
+    let _ = window.set_maximizable(true);
+    let _ = window.set_content_protected(false);
+    let _ = window.set_skip_taskbar(false);
+    let _ = window.show();
+    let _ = window.set_focus();
+    let _ = window.set_title("ExamUQ Client Tauri");
+
+    #[cfg(target_os = "windows")]
+    restore_windows_explorer();
+}
+
+#[cfg(target_os = "windows")]
+fn kill_windows_explorer() {
+    let _ = Command::new("taskkill")
+        .args(["/F", "/IM", "explorer.exe"])
+        .spawn();
+}
+
+#[cfg(target_os = "windows")]
+fn restore_windows_explorer() {
+    let _ = Command::new("explorer.exe").spawn();
 }
 
 #[tauri::command]
@@ -257,20 +288,82 @@ fn open_admin(state: State<'_, RuntimeState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn arm_secret_exit(state: State<'_, RuntimeState>) {
-    if let Ok(mut guard) = state.secret_armed_at.lock() {
-        *guard = Some(Instant::now());
+fn open_exam_direct(
+    app: AppHandle,
+    state: State<'_, RuntimeState>,
+    server_base_url: Option<String>,
+) -> Result<(), String> {
+    let resolved_base_url = if let Some(raw) = server_base_url {
+        normalize_base_url(&raw)?
+    } else {
+        let guard = state.client_state.lock().map_err(|_| "State lock error")?;
+        guard.server_base_url.clone()
+    };
+
+    {
+        let mut allow_close = state
+            .allow_exam_close
+            .lock()
+            .map_err(|_| "State lock error")?;
+        *allow_close = false;
     }
+
+    let launch_url = format!("{}/", resolved_base_url.trim_end_matches('/'));
+    let parsed = Url::parse(&launch_url).map_err(|_| "URL server tidak valid.")?;
+
+    write_runtime_log(&app, &format!("open_exam_direct launch_url={launch_url}"));
+
+    let main_window = app
+        .get_webview_window(EXAM_WINDOW_LABEL)
+        .ok_or_else(|| "Main window tidak ditemukan.".to_string())?;
+
+    let _ = main_window.navigate(parsed);
+    activate_exam_kiosk(&main_window);
+    let _ = main_window.set_title("ExamUQ Client - Ujian");
+    let _ = main_window.show();
+    let _ = main_window.set_focus();
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.set_activation_policy(ActivationPolicy::Regular);
+        let _ = app.set_dock_visibility(true);
+    }
+
+    Ok(())
 }
 
-async fn close_exam_window_with_session_end(
+#[tauri::command]
+fn finish_exam_session(app: AppHandle, state: State<'_, RuntimeState>) -> Result<(), String> {
+    let main_window = app
+        .get_webview_window(EXAM_WINDOW_LABEL)
+        .ok_or_else(|| "Main window tidak ditemukan.".to_string())?;
+
+    {
+        let mut allow_close = state
+            .allow_exam_close
+            .lock()
+            .map_err(|_| "State lock error")?;
+        *allow_close = true;
+    }
+
+    restore_launcher_window(&main_window);
+    apply_macos_exam_presentation_lock(&app, false);
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.set_activation_policy(ActivationPolicy::Regular);
+        let _ = app.set_dock_visibility(true);
+    }
+
+    write_runtime_log(&app, "finish_exam_session invoked");
+    Ok(())
+}
+
+async fn close_app_with_session_end(
     app: &AppHandle,
     state: &State<'_, RuntimeState>,
 ) -> Result<(), String> {
-    let Some(exam_window) = app.get_webview_window(EXAM_WINDOW_LABEL) else {
-        show_main_window(app);
-        return Ok(());
-    };
+    let exam_window = app.get_webview_window(EXAM_WINDOW_LABEL);
 
     let end_script = r#"
       (async () => {
@@ -292,7 +385,10 @@ async fn close_exam_window_with_session_end(
       })();
     "#;
 
-    let _ = exam_window.eval(end_script);
+    if let Some(window) = &exam_window {
+        let _ = window.eval(end_script);
+    }
+
     thread::sleep(Duration::from_millis(END_SESSION_EVAL_DELAY_MS));
 
     {
@@ -303,50 +399,35 @@ async fn close_exam_window_with_session_end(
         *allow_close = true;
     }
 
-    let _ = exam_window.set_closable(true);
-    let _ = exam_window.set_minimizable(true);
-    let _ = exam_window.set_maximizable(true);
-    let _ = exam_window.set_always_on_top(false);
-    let _ = exam_window.set_fullscreen(false);
-    let _ = exam_window.set_decorations(true);
-    let _ = exam_window.close();
-
-    {
-        let mut allow_close = state
-            .allow_exam_close
-            .lock()
-            .map_err(|_| "State lock error")?;
-        *allow_close = false;
+    if let Some(window) = &exam_window {
+        let _ = window.set_closable(true);
+        let _ = window.set_minimizable(true);
+        let _ = window.set_maximizable(true);
+        let _ = window.set_always_on_top(false);
+        let _ = window.set_content_protected(false);
+        let _ = window.set_skip_taskbar(false);
+        let _ = window.set_fullscreen(false);
+        let _ = window.set_decorations(true);
     }
 
-    show_main_window(app);
+    #[cfg(target_os = "windows")]
+    restore_windows_explorer();
+
+    apply_macos_exam_presentation_lock(app, false);
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.set_activation_policy(ActivationPolicy::Regular);
+        let _ = app.set_dock_visibility(true);
+    }
+
+    app.exit(0);
     Ok(())
 }
 
 #[tauri::command]
-async fn execute_secret_exit(
-    app: AppHandle,
-    state: State<'_, RuntimeState>,
-) -> Result<(), String> {
-    let armed = {
-        let mut guard = state
-            .secret_armed_at
-            .lock()
-            .map_err(|_| "State lock error")?;
-
-        let ok = guard
-            .map(|instant| instant.elapsed() <= Duration::from_millis(SECRET_EXIT_WINDOW_MS))
-            .unwrap_or(false);
-
-        *guard = None;
-        ok
-    };
-
-    if !armed {
-        return Ok(());
-    }
-
-    close_exam_window_with_session_end(&app, &state).await
+async fn execute_secret_exit(app: AppHandle, state: State<'_, RuntimeState>) -> Result<(), String> {
+    close_app_with_session_end(&app, &state).await
 }
 
 #[tauri::command]
@@ -359,38 +440,33 @@ async fn start_exam(
         guard.server_base_url.clone()
     };
 
-    let launch_url = format!("{}/", server_base_url.trim_end_matches('/'));
-    let parsed = Url::parse(&launch_url).map_err(|_| "URL server tidak valid.")?;
-
-    if let Some(existing) = app.get_webview_window(EXAM_WINDOW_LABEL) {
-        let _ = existing.navigate(parsed.clone());
-        ensure_exam_window_kiosk(&existing);
-        hide_main_window(&app);
-
-        return Ok(StartExamResponse {
-            ok: true,
-            server_base_url,
-        });
+    {
+        let mut allow_close = state
+            .allow_exam_close
+            .lock()
+            .map_err(|_| "State lock error")?;
+        *allow_close = true;
     }
 
-    let exam_window = WebviewWindowBuilder::new(
-        &app,
-        EXAM_WINDOW_LABEL,
-        WebviewUrl::External(parsed),
-    )
-    .title("ExamUQ Client")
-    .decorations(false)
-    .resizable(false)
-    .fullscreen(true)
-    .always_on_top(true)
-    .focused(true)
-    .user_agent("examuq-client")
-    .initialization_script(EXAM_WINDOW_INIT_SCRIPT)
-    .build()
-    .map_err(|e| format!("Gagal membuka window ujian: {e}"))?;
+    let launch_url = format!("{}/", server_base_url.trim_end_matches('/'));
+    let _ = Url::parse(&launch_url).map_err(|_| "URL server tidak valid.")?;
+    write_runtime_log(&app, &format!("start_exam launch_url={launch_url}"));
 
-    ensure_exam_window_kiosk(&exam_window);
-    hide_main_window(&app);
+    let main_window = app
+        .get_webview_window(EXAM_WINDOW_LABEL)
+        .ok_or_else(|| "Main window tidak ditemukan.".to_string())?;
+
+    activate_exam_kiosk(&main_window);
+    let _ = main_window.set_title("ExamUQ Client - Ujian");
+    let _ = main_window.show();
+    let _ = main_window.set_focus();
+
+    apply_macos_exam_presentation_lock(&app, true);
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.set_activation_policy(ActivationPolicy::Regular);
+        let _ = app.set_dock_visibility(true);
+    }
 
     Ok(StartExamResponse {
         ok: true,
@@ -400,9 +476,52 @@ async fn start_exam(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app = tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
+    let mut builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
+
+    let global_shortcut_plugin_builder = tauri_plugin_global_shortcut::Builder::new()
+        .with_shortcut(Shortcut::new(
+            Some(Modifiers::CONTROL | Modifiers::SHIFT),
+            Code::KeyX,
+        ))
+        .expect("failed to register ctrl+shift+x global shortcut");
+
+    #[cfg(target_os = "macos")]
+    let global_shortcut_plugin_builder = global_shortcut_plugin_builder
+        .with_shortcut(Shortcut::new(
+            Some(Modifiers::SUPER | Modifiers::SHIFT),
+            Code::KeyX,
+        ))
+        .expect("failed to register cmd+shift+x global shortcut");
+
+    let global_shortcut_plugin = global_shortcut_plugin_builder
+        .with_handler(|app, _shortcut, event| {
+            if event.state != ShortcutState::Pressed {
+                return;
+            }
+
+            if let Some(state) = app.try_state::<RuntimeState>() {
+                if exam_kiosk_is_active(app, &state) {
+                    force_exit_now(app);
+                }
+            }
+        })
+        .build();
+
+    builder = builder.plugin(global_shortcut_plugin);
+
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.enable_macos_default_menu(false);
+    }
+
+    let app = builder
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            {
+                let _ = app.set_activation_policy(ActivationPolicy::Regular);
+                let _ = app.set_dock_visibility(true);
+            }
+
             let mut loaded = load_client_state(&app.handle());
 
             loaded.server_base_url = normalize_base_url(&loaded.server_base_url)
@@ -416,8 +535,7 @@ pub fn run() {
 
             app.manage(RuntimeState {
                 client_state: Mutex::new(loaded),
-                allow_exam_close: Mutex::new(false),
-                secret_armed_at: Mutex::new(None),
+                allow_exam_close: Mutex::new(true),
             });
 
             Ok(())
@@ -439,9 +557,13 @@ pub fn run() {
 
             if let WindowEvent::Focused(false) = event {
                 if let Some(state) = window.try_state::<RuntimeState>() {
-                    if exam_window_is_locked(&state) {
-                        if let Some(exam_window) = window.app_handle().get_webview_window(EXAM_WINDOW_LABEL) {
+                    if exam_kiosk_is_active(&window.app_handle(), &state) {
+                        if let Some(exam_window) =
+                            window.app_handle().get_webview_window(EXAM_WINDOW_LABEL)
+                        {
                             ensure_exam_window_kiosk(&exam_window);
+                            apply_macos_exam_presentation_lock(&window.app_handle(), true);
+                            let _ = exam_window.set_focus();
                         }
                     }
                 }
@@ -452,7 +574,8 @@ pub fn run() {
             update_settings,
             open_admin,
             start_exam,
-            arm_secret_exit,
+            open_exam_direct,
+            finish_exam_session,
             execute_secret_exit,
         ])
         .build(tauri::generate_context!())
@@ -464,13 +587,14 @@ pub fn run() {
                 return;
             };
 
-            if !exam_window_is_locked(&state) {
+            if !exam_kiosk_is_active(app_handle, &state) {
                 return;
             }
 
             if let Some(exam_window) = app_handle.get_webview_window(EXAM_WINDOW_LABEL) {
                 api.prevent_exit();
                 ensure_exam_window_kiosk(&exam_window);
+                apply_macos_exam_presentation_lock(app_handle, true);
             }
         }
     });
