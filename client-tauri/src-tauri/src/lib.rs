@@ -10,8 +10,10 @@ use std::{
 #[cfg(target_os = "windows")]
 use std::process::Command;
 use tauri::{
-    ActivationPolicy, AppHandle, Manager, RunEvent, State, WebviewWindow, WindowEvent,
+    AppHandle, Manager, RunEvent, State, WebviewWindow, WindowEvent,
 };
+#[cfg(target_os = "macos")]
+use tauri::ActivationPolicy;
 use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
 use url::Url;
 
