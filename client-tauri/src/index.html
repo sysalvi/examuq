@@ -63,14 +63,29 @@
           <button id="closeSettingsButton" type="button" class="icon-btn" aria-label="Tutup Pengaturan">✕</button>
         </div>
 
-        <form id="settingsForm" class="form" novalidate>
+        <div id="settingsGate" class="form" novalidate>
+          <p class="settings-note">Masukkan password untuk membuka pengaturan URL server.</p>
+          <label class="label" for="settingsPassword">Password Pengaturan</label>
+          <input
+            id="settingsPassword"
+            name="settingsPassword"
+            type="password"
+            required
+            placeholder="Masukkan password"
+            autocomplete="off"
+          />
+
+          <button id="unlockSettingsButton" type="button" class="btn primary">Buka Pengaturan</button>
+        </div>
+
+        <form id="settingsForm" class="form hidden" novalidate>
           <label class="label" for="serverBaseUrl">Server Base URL</label>
           <input
             id="serverBaseUrl"
             name="serverBaseUrl"
             type="text"
             required
-            placeholder="http://10.10.20.2:6996"
+            placeholder="http://10.10.20.2:6997"
             autocomplete="off"
           />
 

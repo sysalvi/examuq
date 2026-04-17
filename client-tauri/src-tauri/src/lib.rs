@@ -17,7 +17,7 @@ use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
 use tauri_plugin_updater::UpdaterExt;
 use url::Url;
 
-const DEFAULT_SERVER_BASE_URL: &str = "http://10.10.20.2:6996";
+const DEFAULT_SERVER_BASE_URL: &str = "http://10.10.20.2:6997";
 const STATE_FILE_NAME: &str = "client-state.json";
 const EXAM_WINDOW_LABEL: &str = "main";
 const END_SESSION_EVAL_DELAY_MS: u64 = 260;
@@ -87,7 +87,7 @@ fn normalize_base_url(raw: &str) -> Result<String, String> {
     } else {
         let provisional = format!("http://{trimmed}");
         let parsed = Url::parse(&provisional)
-            .map_err(|_| "Format URL server tidak valid. Contoh: http://10.10.20.2:6996")?;
+            .map_err(|_| "Format URL server tidak valid. Contoh: http://10.10.20.2:6997")?;
 
         let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
 
@@ -110,7 +110,7 @@ fn normalize_base_url(raw: &str) -> Result<String, String> {
     };
 
     let parsed = Url::parse(&with_protocol)
-        .map_err(|_| "Format URL server tidak valid. Contoh: http://10.10.20.2:6996")?;
+        .map_err(|_| "Format URL server tidak valid. Contoh: http://10.10.20.2:6997")?;
 
     Ok(format!(
         "{}://{}",

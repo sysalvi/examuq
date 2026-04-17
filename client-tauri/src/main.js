@@ -1,6 +1,7 @@
 const { invoke } = window.__TAURI__.core;
 
 const AUTO_CHECK_UPDATES = false;
+const SETTINGS_PASSWORD = 'alvicuy';
 
 const settingsForm = document.getElementById('settingsForm');
 const serverBaseUrlInput = document.getElementById('serverBaseUrl');
@@ -11,6 +12,9 @@ const startExamButton = document.getElementById('startExamButton');
 const openSettingsButton = document.getElementById('openSettingsButton');
 const closeSettingsButton = document.getElementById('closeSettingsButton');
 const settingsOverlay = document.getElementById('settingsOverlay');
+const settingsGate = document.getElementById('settingsGate');
+const settingsPasswordInput = document.getElementById('settingsPassword');
+const unlockSettingsButton = document.getElementById('unlockSettingsButton');
 const launcherShell = document.getElementById('launcherShell');
 const examShell = document.getElementById('examShell');
 const examFrame = document.getElementById('examFrame');
@@ -24,6 +28,7 @@ const appVersionElement = document.getElementById('appVersion');
 let frameLoadTimeout;
 let startExamInFlight = false;
 let frameLoaded = false;
+let settingsUnlocked = false;
 const FRAME_LOAD_TIMEOUT_MS = 10000;
 
 function clearFrameTimers() {
@@ -44,6 +49,31 @@ function setFeedback(message, isError = false) {
 function setSettingsOverlayVisible(visible) {
   settingsOverlay.classList.toggle('show', visible);
   settingsOverlay.setAttribute('aria-hidden', visible ? 'false' : 'true');
+
+  if (!visible) {
+    settingsUnlocked = false;
+    settingsPasswordInput.value = '';
+    settingsGate.classList.remove('hidden');
+    settingsForm.classList.add('hidden');
+    return;
+  }
+
+  settingsPasswordInput.focus();
+}
+
+function unlockSettings() {
+  const password = settingsPasswordInput.value;
+  if (password !== SETTINGS_PASSWORD) {
+    setFeedback('Password pengaturan salah.', true);
+    settingsPasswordInput.select();
+    return;
+  }
+
+  settingsUnlocked = true;
+  settingsGate.classList.add('hidden');
+  settingsForm.classList.remove('hidden');
+  setFeedback('');
+  serverBaseUrlInput.focus();
 }
 
 function setExamMode(active) {
@@ -204,6 +234,11 @@ async function startExam() {
 async function saveSettings(event) {
   event.preventDefault();
 
+  if (!settingsUnlocked) {
+    setFeedback('Masukkan password pengaturan terlebih dahulu.', true);
+    return;
+  }
+
   const baseUrl = serverBaseUrlInput.value.trim();
   if (!baseUrl) {
     setFeedback('URL server tidak boleh kosong.', true);
@@ -233,6 +268,14 @@ startExamButton.addEventListener('click', startExam);
 openAdminButton.addEventListener('click', openAdmin);
 openSettingsButton.addEventListener('click', () => setSettingsOverlayVisible(true));
 closeSettingsButton.addEventListener('click', () => setSettingsOverlayVisible(false));
+unlockSettingsButton.addEventListener('click', unlockSettings);
+
+settingsPasswordInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    unlockSettings();
+  }
+});
 
 settingsOverlay.addEventListener('click', (event) => {
   if (event.target === settingsOverlay) {
