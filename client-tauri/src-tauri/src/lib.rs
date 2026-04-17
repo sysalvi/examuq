@@ -18,6 +18,8 @@ use tauri_plugin_updater::UpdaterExt;
 use url::Url;
 
 const DEFAULT_SERVER_BASE_URL: &str = "http://10.10.20.2:6997";
+const LEGACY_SERVER_BASE_URL: &str = "http://10.10.20.2:6996";
+const LEGACY_SERVER_HOSTS: [&str; 2] = ["kreasai.com", "www.kreasai.com"];
 const STATE_FILE_NAME: &str = "client-state.json";
 const EXAM_WINDOW_LABEL: &str = "main";
 const END_SESSION_EVAL_DELAY_MS: u64 = 260;
@@ -120,6 +122,22 @@ fn normalize_base_url(raw: &str) -> Result<String, String> {
         .port()
         .map(|port| format!(":{port}"))
         .unwrap_or_default())
+}
+
+fn should_migrate_to_default_server_url(base_url: &str) -> bool {
+    if base_url == LEGACY_SERVER_BASE_URL {
+        return true;
+    }
+
+    if let Ok(parsed) = Url::parse(base_url) {
+        if let Some(host) = parsed.host_str() {
+            return LEGACY_SERVER_HOSTS
+                .iter()
+                .any(|legacy_host| host.eq_ignore_ascii_case(legacy_host));
+        }
+    }
+
+    false
 }
 
 fn generate_device_id() -> String {
@@ -332,16 +350,30 @@ fn exam_kiosk_is_active(app: &AppHandle, state: &RuntimeState) -> bool {
     exam_window_is_locked(state) && app.get_webview_window(EXAM_WINDOW_LABEL).is_some()
 }
 
-fn force_exit_now(app: &AppHandle) {
-    if let Some(state) = app.try_state::<RuntimeState>() {
-        if let Ok(mut allow_close) = state.allow_exam_close.lock() {
-            *allow_close = true;
-        }
+fn return_to_launcher_runtime(
+    app: &AppHandle,
+    state: &RuntimeState,
+    reason: &str,
+) -> Result<(), String> {
+    let main_window = app
+        .get_webview_window(EXAM_WINDOW_LABEL)
+        .ok_or_else(|| "Main window tidak ditemukan.".to_string())?;
+
+    {
+        let mut allow_close = state
+            .allow_exam_close
+            .lock()
+            .map_err(|_| "State lock error")?;
+        *allow_close = true;
     }
 
+    restore_launcher_window(&main_window);
     apply_macos_exam_presentation_lock(app, false);
-    set_android_exam_lock(app, false);
-    app.exit(0);
+    let _ = main_window
+        .eval("window.__EXAMUQ_RETURN_TO_LAUNCHER__ && window.__EXAMUQ_RETURN_TO_LAUNCHER__();");
+    write_runtime_log(app, reason);
+
+    Ok(())
 }
 
 fn write_runtime_log(app: &AppHandle, message: &str) {
@@ -577,23 +609,7 @@ fn open_exam_direct(
 
 #[tauri::command]
 fn finish_exam_session(app: AppHandle, state: State<'_, RuntimeState>) -> Result<(), String> {
-    let main_window = app
-        .get_webview_window(EXAM_WINDOW_LABEL)
-        .ok_or_else(|| "Main window tidak ditemukan.".to_string())?;
-
-    {
-        let mut allow_close = state
-            .allow_exam_close
-            .lock()
-            .map_err(|_| "State lock error")?;
-        *allow_close = true;
-    }
-
-    restore_launcher_window(&main_window);
-    apply_macos_exam_presentation_lock(&app, false);
-
-    write_runtime_log(&app, "finish_exam_session invoked");
-    Ok(())
+    return_to_launcher_runtime(&app, &state, "finish_exam_session invoked")
 }
 
 async fn close_app_with_session_end(
@@ -735,7 +751,31 @@ pub fn run() {
             ))
             .expect("failed to register ctrl+shift+x global shortcut")
             .with_shortcut(Shortcut::new(None, Code::Escape))
-            .expect("failed to register escape global shortcut");
+            .expect("failed to register escape global shortcut")
+            .with_shortcut(Shortcut::new(None, Code::F1))
+            .expect("failed to register f1 global shortcut")
+            .with_shortcut(Shortcut::new(None, Code::F2))
+            .expect("failed to register f2 global shortcut")
+            .with_shortcut(Shortcut::new(None, Code::F3))
+            .expect("failed to register f3 global shortcut")
+            .with_shortcut(Shortcut::new(None, Code::F4))
+            .expect("failed to register f4 global shortcut")
+            .with_shortcut(Shortcut::new(None, Code::F5))
+            .expect("failed to register f5 global shortcut")
+            .with_shortcut(Shortcut::new(None, Code::F6))
+            .expect("failed to register f6 global shortcut")
+            .with_shortcut(Shortcut::new(None, Code::F7))
+            .expect("failed to register f7 global shortcut")
+            .with_shortcut(Shortcut::new(None, Code::F8))
+            .expect("failed to register f8 global shortcut")
+            .with_shortcut(Shortcut::new(None, Code::F9))
+            .expect("failed to register f9 global shortcut")
+            .with_shortcut(Shortcut::new(None, Code::F10))
+            .expect("failed to register f10 global shortcut")
+            .with_shortcut(Shortcut::new(None, Code::F11))
+            .expect("failed to register f11 global shortcut")
+            .with_shortcut(Shortcut::new(None, Code::F12))
+            .expect("failed to register f12 global shortcut");
 
         #[cfg(target_os = "macos")]
         let global_shortcut_plugin_builder = global_shortcut_plugin_builder
@@ -752,6 +792,33 @@ pub fn run() {
                 }
 
                 if let Some(state) = app.try_state::<RuntimeState>() {
+                    if [
+                        Code::F1,
+                        Code::F2,
+                        Code::F3,
+                        Code::F4,
+                        Code::F5,
+                        Code::F6,
+                        Code::F7,
+                        Code::F8,
+                        Code::F9,
+                        Code::F10,
+                        Code::F11,
+                        Code::F12,
+                    ]
+                    .into_iter()
+                    .any(|code| shortcut.id() == Shortcut::new(None, code).id())
+                    {
+                        if exam_kiosk_is_active(app, &state) {
+                            if let Some(exam_window) = app.get_webview_window(EXAM_WINDOW_LABEL) {
+                                ensure_exam_window_kiosk(&exam_window);
+                                apply_macos_exam_presentation_lock(app, true);
+                                let _ = exam_window.set_focus();
+                            }
+                        }
+                        return;
+                    }
+
                     if shortcut.id() == Shortcut::new(None, Code::Escape).id() {
                         if exam_kiosk_is_active(app, &state) {
                             if let Some(exam_window) = app.get_webview_window(EXAM_WINDOW_LABEL) {
@@ -764,7 +831,15 @@ pub fn run() {
                     }
 
                     if exam_kiosk_is_active(app, &state) {
-                        force_exit_now(app);
+                        let _ = return_to_launcher_runtime(
+                            app,
+                            &state,
+                            "global shortcut emergency return invoked",
+                        );
+
+                        if let Some(exam_window) = app.get_webview_window(EXAM_WINDOW_LABEL) {
+                            let _ = exam_window.set_focus();
+                        }
                     }
                 }
             })
@@ -790,6 +865,10 @@ pub fn run() {
 
             loaded.server_base_url = normalize_base_url(&loaded.server_base_url)
                 .unwrap_or_else(|_| DEFAULT_SERVER_BASE_URL.to_string());
+
+            if should_migrate_to_default_server_url(&loaded.server_base_url) {
+                loaded.server_base_url = DEFAULT_SERVER_BASE_URL.to_string();
+            }
 
             if loaded.device_id.trim().is_empty() {
                 loaded.device_id = generate_device_id();

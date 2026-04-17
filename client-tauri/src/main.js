@@ -31,6 +31,10 @@ let frameLoaded = false;
 let settingsUnlocked = false;
 const FRAME_LOAD_TIMEOUT_MS = 10000;
 
+function isBlockedFunctionKey(key) {
+  return /^F([1-9]|1[0-2])$/.test(key);
+}
+
 function clearFrameTimers() {
   clearTimeout(frameLoadTimeout);
 }
@@ -127,14 +131,19 @@ function finishExamFrameLoading(success) {
   examLoading.classList.add('show');
 }
 
+function returnToLauncherUi(message = '') {
+  examFrame.src = 'about:blank';
+  setExamMode(false);
+  setFinishOverlayVisible(false);
+  setFeedback(message, false);
+}
+
 async function finishExamSession() {
   confirmFinishButton.disabled = true;
   cancelFinishButton.disabled = true;
   openFinishOverlayButton.disabled = true;
 
-  examFrame.src = 'about:blank';
-  setExamMode(false);
-  setFeedback('Mengakhiri sesi dan kembali ke halaman awal...');
+  returnToLauncherUi('Mengakhiri sesi dan kembali ke halaman awal...');
 
   void invoke('finish_exam_session')
     .then(() => setFeedback(''))
@@ -148,6 +157,10 @@ async function finishExamSession() {
       setFinishOverlayVisible(false);
     });
 }
+
+window.__EXAMUQ_RETURN_TO_LAUNCHER__ = () => {
+  returnToLauncherUi('Mode ujian dihentikan oleh tombol darurat.');
+};
 
 async function maybeCheckForUpdates() {
   if (!AUTO_CHECK_UPDATES) {
@@ -296,6 +309,12 @@ finishOverlay.addEventListener('click', (event) => {
 document.addEventListener(
   'keydown',
   (event) => {
+    if (isBlockedFunctionKey(event.key)) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
     if (event.key !== 'Escape') {
       return;
     }
