@@ -35,6 +35,15 @@ function isBlockedFunctionKey(key) {
   return /^F([1-9]|1[0-2])$/.test(key);
 }
 
+function isBlockedRefreshShortcut(event) {
+  const key = String(event.key || '').toLowerCase();
+  return (event.ctrlKey || event.metaKey) && key === 'r';
+}
+
+function shouldBlockHotkey(event) {
+  return isBlockedFunctionKey(event.key) || isBlockedRefreshShortcut(event);
+}
+
 function clearFrameTimers() {
   clearTimeout(frameLoadTimeout);
 }
@@ -309,7 +318,7 @@ finishOverlay.addEventListener('click', (event) => {
 document.addEventListener(
   'keydown',
   (event) => {
-    if (isBlockedFunctionKey(event.key)) {
+    if (shouldBlockHotkey(event)) {
       event.preventDefault();
       event.stopPropagation();
       return;

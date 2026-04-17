@@ -70,16 +70,31 @@ jobs:
           $portableDir = Join-Path $releaseDir "portable"
           New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
 
-          $candidate = Get-ChildItem $releaseDir -Filter "*.exe" -File |
-            Where-Object { $_.Name -notmatch "setup|unins|crashpad|squirrel" } |
-            Sort-Object Length -Descending |
-            Select-Object -First 1
+          $version = (Get-Content "src-tauri/tauri.conf.json" | ConvertFrom-Json).version
+
+          $preferredNames = @("client-tauri.exe", "ExamUQ Client.exe", "ExamUQ Client Tauri.exe")
+
+          $candidate = $null
+          foreach ($name in $preferredNames) {
+            $path = Join-Path $releaseDir $name
+            if (Test-Path $path) {
+              $candidate = Get-Item $path
+              break
+            }
+          }
+
+          if (-not $candidate) {
+            $candidate = Get-ChildItem $releaseDir -Filter "*.exe" -File |
+              Where-Object { $_.Name -notmatch "setup|unins|crashpad|squirrel|updater" } |
+              Sort-Object Length -Descending |
+              Select-Object -First 1
+          }
 
           if (-not $candidate) {
             throw "Portable executable not found in $releaseDir"
           }
 
-          Copy-Item $candidate.FullName (Join-Path $portableDir "ExamUQ Client_portable.exe") -Force
+          Copy-Item $candidate.FullName (Join-Path $portableDir "ExamUQ Client_${version}_x64_portable.exe") -Force
 
       - name: Upload macOS artifact
         if: matrix.os == 'macos-latest'

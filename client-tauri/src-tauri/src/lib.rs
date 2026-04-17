@@ -19,7 +19,7 @@ use url::Url;
 
 const DEFAULT_SERVER_BASE_URL: &str = "http://10.10.20.2:6997";
 const LEGACY_SERVER_BASE_URL: &str = "http://10.10.20.2:6996";
-const LEGACY_SERVER_HOSTS: [&str; 2] = ["kreasai.com", "www.kreasai.com"];
+const LEGACY_SERVER_HOSTS: [&str; 1] = ["kreasai.com"];
 const STATE_FILE_NAME: &str = "client-state.json";
 const EXAM_WINDOW_LABEL: &str = "main";
 const END_SESSION_EVAL_DELAY_MS: u64 = 260;
@@ -131,9 +131,10 @@ fn should_migrate_to_default_server_url(base_url: &str) -> bool {
 
     if let Ok(parsed) = Url::parse(base_url) {
         if let Some(host) = parsed.host_str() {
-            return LEGACY_SERVER_HOSTS
-                .iter()
-                .any(|legacy_host| host.eq_ignore_ascii_case(legacy_host));
+            let host = host.to_ascii_lowercase();
+            return LEGACY_SERVER_HOSTS.iter().any(|legacy_host| {
+                host == *legacy_host || host.ends_with(&format!(".{legacy_host}"))
+            });
         }
     }
 
@@ -775,7 +776,14 @@ pub fn run() {
             .with_shortcut(Shortcut::new(None, Code::F11))
             .expect("failed to register f11 global shortcut")
             .with_shortcut(Shortcut::new(None, Code::F12))
-            .expect("failed to register f12 global shortcut");
+            .expect("failed to register f12 global shortcut")
+            .with_shortcut(Shortcut::new(Some(Modifiers::CONTROL), Code::KeyR))
+            .expect("failed to register ctrl+r global shortcut");
+
+        #[cfg(target_os = "macos")]
+        let global_shortcut_plugin_builder = global_shortcut_plugin_builder
+            .with_shortcut(Shortcut::new(Some(Modifiers::SUPER), Code::KeyR))
+            .expect("failed to register cmd+r global shortcut");
 
         #[cfg(target_os = "macos")]
         let global_shortcut_plugin_builder = global_shortcut_plugin_builder
@@ -809,12 +817,29 @@ pub fn run() {
                     .into_iter()
                     .any(|code| shortcut.id() == Shortcut::new(None, code).id())
                     {
-                        if exam_kiosk_is_active(app, &state) {
-                            if let Some(exam_window) = app.get_webview_window(EXAM_WINDOW_LABEL) {
-                                ensure_exam_window_kiosk(&exam_window);
+                        if let Some(exam_window) = app.get_webview_window(EXAM_WINDOW_LABEL) {
+                            ensure_exam_window_kiosk(&exam_window);
+                            if exam_kiosk_is_active(app, &state) {
                                 apply_macos_exam_presentation_lock(app, true);
-                                let _ = exam_window.set_focus();
                             }
+                            let _ = exam_window.set_focus();
+                        }
+                        return;
+                    }
+
+                    let refresh_shortcut_ids = [
+                        Shortcut::new(Some(Modifiers::CONTROL), Code::KeyR).id(),
+                        #[cfg(target_os = "macos")]
+                        Shortcut::new(Some(Modifiers::SUPER), Code::KeyR).id(),
+                    ];
+
+                    if refresh_shortcut_ids
+                        .into_iter()
+                        .any(|shortcut_id| shortcut.id() == shortcut_id)
+                    {
+                        if let Some(exam_window) = app.get_webview_window(EXAM_WINDOW_LABEL) {
+                            ensure_exam_window_kiosk(&exam_window);
+                            let _ = exam_window.set_focus();
                         }
                         return;
                     }
