@@ -24,6 +24,17 @@ class ExamsTable
                 TextColumn::make('class_room')
                     ->label('Kelas/Ruang')
                     ->searchable(),
+                TextColumn::make('token_global')
+                    ->label('Token')
+                    ->searchable()
+                    ->badge()
+                    ->color('warning')
+                    ->copyable()
+                    ->copyMessage('Token ujian berhasil disalin')
+                    ->copyMessageDuration(1500)
+                    ->fontFamily('mono')
+                    ->weight('bold')
+                    ->alignCenter(),
                 TextColumn::make('exam_url')
                     ->label('URL Ujian')
                     ->wrap()

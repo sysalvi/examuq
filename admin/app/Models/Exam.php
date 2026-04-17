@@ -6,10 +6,20 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Str;
 
 class Exam extends Model
 {
     use HasFactory;
+
+    protected static function booted(): void
+    {
+        static::creating(function (Exam $exam): void {
+            if (! filled($exam->token_global)) {
+                $exam->token_global = static::generateUniqueToken();
+            }
+        });
+    }
 
     protected $fillable = [
         'title',
@@ -43,5 +53,14 @@ class Exam extends Model
     public function launchTokens(): HasMany
     {
         return $this->hasMany(LaunchToken::class);
+    }
+
+    public static function generateUniqueToken(): string
+    {
+        do {
+            $token = Str::upper(Str::random(6));
+        } while (static::query()->where('token_global', $token)->exists());
+
+        return $token;
     }
 }
