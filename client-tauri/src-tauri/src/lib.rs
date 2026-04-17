@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "windows")]
+use std::process::Command;
 use std::{
     fs,
     io::Write,
@@ -7,13 +9,10 @@ use std::{
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-#[cfg(target_os = "windows")]
-use std::process::Command;
-use tauri::{
-    AppHandle, Manager, RunEvent, State, WebviewWindow, WindowEvent,
-};
 #[cfg(target_os = "macos")]
 use tauri::ActivationPolicy;
+use tauri::{AppHandle, Manager, RunEvent, State, WebviewWindow, WindowEvent};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
 use tauri_plugin_updater::UpdaterExt;
 use url::Url;
@@ -22,12 +21,17 @@ const DEFAULT_SERVER_BASE_URL: &str = "http://10.10.20.2:6996";
 const STATE_FILE_NAME: &str = "client-state.json";
 const EXAM_WINDOW_LABEL: &str = "main";
 const END_SESSION_EVAL_DELAY_MS: u64 = 260;
+#[cfg(target_os = "android")]
+const ANDROID_EXAM_LOCK_FILE: &str = "exam-kiosk.lock";
+#[cfg(target_os = "android")]
+const ANDROID_PERMISSION_GATE_FILE: &str = "permissions-ready.lock";
 const DEFAULT_UPDATE_CHANNEL: &str = "stable";
 const DEFAULT_UPDATE_ENDPOINT_TEMPLATE: &str =
     "https://updates.examuq.id/{{target}}/{{arch}}/{{current_version}}?channel={channel}";
 const BUILD_TIME_UPDATE_CHANNEL: Option<&str> = option_env!("EXAMUQ_UPDATE_CHANNEL");
 const BUILD_TIME_ALLOW_BETA: Option<&str> = option_env!("EXAMUQ_ALLOW_BETA");
-const BUILD_TIME_UPDATE_ENDPOINT_TEMPLATE: Option<&str> = option_env!("EXAMUQ_UPDATER_ENDPOINT_TEMPLATE");
+const BUILD_TIME_UPDATE_ENDPOINT_TEMPLATE: Option<&str> =
+    option_env!("EXAMUQ_UPDATER_ENDPOINT_TEMPLATE");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -298,22 +302,23 @@ async fn install_available_update(app: AppHandle) -> Result<InstallUpdateResult,
     })
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn ensure_exam_window_kiosk(window: &WebviewWindow) {
+    if matches!(window.is_minimized(), Ok(true)) {
+        let _ = window.unminimize();
+    }
     if !matches!(window.is_fullscreen(), Ok(true)) {
         let _ = window.set_fullscreen(true);
     }
     let _ = window.set_content_protected(false);
     let _ = window.set_skip_taskbar(false);
-    let _ = window.set_decorations(false);
-    let _ = window.set_resizable(false);
-    let _ = window.set_closable(false);
-    let _ = window.set_minimizable(false);
-    let _ = window.set_maximizable(false);
     let _ = window.set_always_on_top(true);
-    let _ = window.unminimize();
     let _ = window.show();
     let _ = window.set_focus();
 }
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn ensure_exam_window_kiosk(_window: &WebviewWindow) {}
 
 fn exam_window_is_locked(state: &RuntimeState) -> bool {
     state
@@ -335,6 +340,7 @@ fn force_exit_now(app: &AppHandle) {
     }
 
     apply_macos_exam_presentation_lock(app, false);
+    set_android_exam_lock(app, false);
     app.exit(0);
 }
 
@@ -357,6 +363,84 @@ fn write_runtime_log(app: &AppHandle, message: &str) {
     }
 }
 
+#[cfg(target_os = "android")]
+fn set_android_exam_lock(app: &AppHandle, locked: bool) {
+    let Ok(mut path) = state_file_path(app) else {
+        return;
+    };
+
+    path.set_file_name(ANDROID_EXAM_LOCK_FILE);
+    let value = if locked { "1" } else { "0" };
+    let _ = fs::write(path, value);
+}
+
+#[cfg(target_os = "android")]
+fn android_permissions_are_ready(app: &AppHandle) -> bool {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(mut path) = state_file_path(app) {
+        path.set_file_name(ANDROID_PERMISSION_GATE_FILE);
+        candidates.push(path);
+    }
+
+    if let Ok(path) = app.path().app_data_dir() {
+        candidates.push(path.join(ANDROID_PERMISSION_GATE_FILE));
+    }
+
+    if let Ok(path) = app.path().app_config_dir() {
+        candidates.push(path.join(ANDROID_PERMISSION_GATE_FILE));
+    }
+
+    if let Ok(path) = app.path().app_cache_dir() {
+        candidates.push(path.join(ANDROID_PERMISSION_GATE_FILE));
+    }
+
+    candidates.sort();
+    candidates.dedup();
+
+    let mut saw_explicit_false = false;
+    let mut saw_marker = false;
+
+    for path in candidates {
+        let Ok(raw) = fs::read_to_string(&path) else {
+            continue;
+        };
+
+        saw_marker = true;
+        let flag = raw.trim();
+
+        if flag == "1" {
+            return true;
+        }
+
+        if flag == "0" {
+            saw_explicit_false = true;
+        }
+    }
+
+    if saw_explicit_false {
+        return false;
+    }
+
+    if !saw_marker {
+        write_runtime_log(
+            app,
+            "android permission gate marker not found; falling back to native gate enforcement",
+        );
+        return true;
+    }
+
+    false
+}
+
+#[cfg(not(target_os = "android"))]
+fn android_permissions_are_ready(_app: &AppHandle) -> bool {
+    true
+}
+
+#[cfg(not(target_os = "android"))]
+fn set_android_exam_lock(_app: &AppHandle, _locked: bool) {}
+
 fn apply_macos_exam_presentation_lock(_app: &AppHandle, _lock: bool) {}
 
 fn activate_exam_kiosk(window: &WebviewWindow) {
@@ -367,27 +451,30 @@ fn activate_exam_kiosk(window: &WebviewWindow) {
     }
 
     ensure_exam_window_kiosk(window);
+    set_android_exam_lock(&window.app_handle(), true);
 
     #[cfg(target_os = "windows")]
     kill_windows_explorer();
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn restore_launcher_window(window: &WebviewWindow) {
     let _ = window.set_always_on_top(false);
     let _ = window.set_fullscreen(false);
-    let _ = window.set_decorations(true);
-    let _ = window.set_resizable(false);
-    let _ = window.set_closable(true);
-    let _ = window.set_minimizable(true);
-    let _ = window.set_maximizable(true);
     let _ = window.set_content_protected(false);
     let _ = window.set_skip_taskbar(false);
     let _ = window.show();
     let _ = window.set_focus();
-    let _ = window.set_title("ExamUQ Client Tauri");
+    let _ = window.set_title("ExamUQ Client");
+    set_android_exam_lock(&window.app_handle(), false);
 
     #[cfg(target_os = "windows")]
     restore_windows_explorer();
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn restore_launcher_window(window: &WebviewWindow) {
+    set_android_exam_lock(&window.app_handle(), false);
 }
 
 #[cfg(target_os = "windows")]
@@ -438,6 +525,13 @@ fn open_exam_direct(
     state: State<'_, RuntimeState>,
     server_base_url: Option<String>,
 ) -> Result<(), String> {
+    if !android_permissions_are_ready(&app) {
+        write_runtime_log(
+            &app,
+            "open_exam_direct: permission marker false; continue and defer enforcement to native gate",
+        );
+    }
+
     let resolved_base_url = if let Some(raw) = server_base_url {
         normalize_base_url(&raw)?
     } else {
@@ -464,9 +558,13 @@ fn open_exam_direct(
 
     let _ = main_window.navigate(parsed);
     activate_exam_kiosk(&main_window);
-    let _ = main_window.set_title("ExamUQ Client - Ujian");
-    let _ = main_window.show();
-    let _ = main_window.set_focus();
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let _ = main_window.set_title("ExamUQ Client - Ujian");
+        let _ = main_window.show();
+        let _ = main_window.set_focus();
+    }
 
     #[cfg(target_os = "macos")]
     {
@@ -538,16 +636,15 @@ async fn close_app_with_session_end(
         *allow_close = true;
     }
 
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     if let Some(window) = &exam_window {
-        let _ = window.set_closable(true);
-        let _ = window.set_minimizable(true);
-        let _ = window.set_maximizable(true);
         let _ = window.set_always_on_top(false);
         let _ = window.set_content_protected(false);
         let _ = window.set_skip_taskbar(false);
         let _ = window.set_fullscreen(false);
-        let _ = window.set_decorations(true);
     }
+
+    set_android_exam_lock(app, false);
 
     #[cfg(target_os = "windows")]
     restore_windows_explorer();
@@ -574,6 +671,13 @@ async fn start_exam(
     app: AppHandle,
     state: State<'_, RuntimeState>,
 ) -> Result<StartExamResponse, String> {
+    if !android_permissions_are_ready(&app) {
+        write_runtime_log(
+            &app,
+            "start_exam: permission marker false; continue and defer enforcement to native gate",
+        );
+    }
+
     let server_base_url = {
         let guard = state.client_state.lock().map_err(|_| "State lock error")?;
         guard.server_base_url.clone()
@@ -596,9 +700,13 @@ async fn start_exam(
         .ok_or_else(|| "Main window tidak ditemukan.".to_string())?;
 
     activate_exam_kiosk(&main_window);
-    let _ = main_window.set_title("ExamUQ Client - Ujian");
-    let _ = main_window.show();
-    let _ = main_window.set_focus();
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let _ = main_window.set_title("ExamUQ Client - Ujian");
+        let _ = main_window.show();
+        let _ = main_window.set_focus();
+    }
 
     apply_macos_exam_presentation_lock(&app, true);
     #[cfg(target_os = "macos")]
@@ -618,36 +726,52 @@ pub fn run() {
     let mut builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
     builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
 
-    let global_shortcut_plugin_builder = tauri_plugin_global_shortcut::Builder::new()
-        .with_shortcut(Shortcut::new(
-            Some(Modifiers::CONTROL | Modifiers::SHIFT),
-            Code::KeyX,
-        ))
-        .expect("failed to register ctrl+shift+x global shortcut");
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let global_shortcut_plugin_builder = tauri_plugin_global_shortcut::Builder::new()
+            .with_shortcut(Shortcut::new(
+                Some(Modifiers::CONTROL | Modifiers::SHIFT),
+                Code::KeyX,
+            ))
+            .expect("failed to register ctrl+shift+x global shortcut")
+            .with_shortcut(Shortcut::new(None, Code::Escape))
+            .expect("failed to register escape global shortcut");
 
-    #[cfg(target_os = "macos")]
-    let global_shortcut_plugin_builder = global_shortcut_plugin_builder
-        .with_shortcut(Shortcut::new(
-            Some(Modifiers::SUPER | Modifiers::SHIFT),
-            Code::KeyX,
-        ))
-        .expect("failed to register cmd+shift+x global shortcut");
+        #[cfg(target_os = "macos")]
+        let global_shortcut_plugin_builder = global_shortcut_plugin_builder
+            .with_shortcut(Shortcut::new(
+                Some(Modifiers::SUPER | Modifiers::SHIFT),
+                Code::KeyX,
+            ))
+            .expect("failed to register cmd+shift+x global shortcut");
 
-    let global_shortcut_plugin = global_shortcut_plugin_builder
-        .with_handler(|app, _shortcut, event| {
-            if event.state != ShortcutState::Pressed {
-                return;
-            }
-
-            if let Some(state) = app.try_state::<RuntimeState>() {
-                if exam_kiosk_is_active(app, &state) {
-                    force_exit_now(app);
+        let global_shortcut_plugin = global_shortcut_plugin_builder
+            .with_handler(|app, shortcut, event| {
+                if event.state != ShortcutState::Pressed {
+                    return;
                 }
-            }
-        })
-        .build();
 
-    builder = builder.plugin(global_shortcut_plugin);
+                if let Some(state) = app.try_state::<RuntimeState>() {
+                    if shortcut.id() == Shortcut::new(None, Code::Escape).id() {
+                        if exam_kiosk_is_active(app, &state) {
+                            if let Some(exam_window) = app.get_webview_window(EXAM_WINDOW_LABEL) {
+                                ensure_exam_window_kiosk(&exam_window);
+                                apply_macos_exam_presentation_lock(app, true);
+                                let _ = exam_window.set_focus();
+                            }
+                        }
+                        return;
+                    }
+
+                    if exam_kiosk_is_active(app, &state) {
+                        force_exit_now(app);
+                    }
+                }
+            })
+            .build();
+
+        builder = builder.plugin(global_shortcut_plugin);
+    }
 
     #[cfg(target_os = "macos")]
     {
@@ -678,11 +802,27 @@ pub fn run() {
                 allow_exam_close: Mutex::new(true),
             });
 
+            set_android_exam_lock(&app.handle(), false);
+
             Ok(())
         })
         .on_window_event(|window, event| {
             if window.label() != EXAM_WINDOW_LABEL {
                 return;
+            }
+
+            let should_reenforce_on_resize = matches!(event, WindowEvent::Resized(_));
+            if should_reenforce_on_resize {
+                if let Some(state) = window.try_state::<RuntimeState>() {
+                    if exam_kiosk_is_active(&window.app_handle(), &state) {
+                        if let Some(exam_window) =
+                            window.app_handle().get_webview_window(EXAM_WINDOW_LABEL)
+                        {
+                            ensure_exam_window_kiosk(&exam_window);
+                            apply_macos_exam_presentation_lock(&window.app_handle(), true);
+                        }
+                    }
+                }
             }
 
             if let WindowEvent::CloseRequested { api, .. } = event {
@@ -703,6 +843,7 @@ pub fn run() {
                         {
                             ensure_exam_window_kiosk(&exam_window);
                             apply_macos_exam_presentation_lock(&window.app_handle(), true);
+                            #[cfg(not(any(target_os = "android", target_os = "ios")))]
                             let _ = exam_window.set_focus();
                         }
                     }

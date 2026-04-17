@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "ExamUQ Client Tauri",
+  "productName": "ExamUQ Client",
   "version": "0.1.0",
   "identifier": "id.uqd.examuq.clienttauri",
   "build": {
@@ -12,12 +12,15 @@
       {
         "label": "main",
         "title": "ExamUQ Client",
-        "width": 620,
-        "height": 640,
+        "width": 460,
+        "height": 600,
         "resizable": false,
+        "minimizable": false,
         "fullscreen": false,
         "decorations": true,
-        "center": true
+        "center": true,
+        "titleBarStyle": "Transparent",
+        "hiddenTitle": true
       }
     ],
     "security": {

@@ -1,6 +1,6 @@
 const { invoke } = window.__TAURI__.core;
 
-const AUTO_CHECK_UPDATES = true;
+const AUTO_CHECK_UPDATES = false;
 
 const settingsForm = document.getElementById('settingsForm');
 const serverBaseUrlInput = document.getElementById('serverBaseUrl');
@@ -8,7 +8,6 @@ const feedback = document.getElementById('feedback');
 const deviceIdElement = document.getElementById('deviceId');
 const openAdminButton = document.getElementById('openAdminButton');
 const startExamButton = document.getElementById('startExamButton');
-const activeServerElement = document.getElementById('activeServer');
 const openSettingsButton = document.getElementById('openSettingsButton');
 const closeSettingsButton = document.getElementById('closeSettingsButton');
 const settingsOverlay = document.getElementById('settingsOverlay');
@@ -161,7 +160,6 @@ async function hydrateState() {
 
     if (state?.serverBaseUrl) {
       serverBaseUrlInput.value = state.serverBaseUrl;
-      activeServerElement.textContent = state.serverBaseUrl;
     }
 
     if (state?.deviceId) {
@@ -214,7 +212,6 @@ async function saveSettings(event) {
 
   try {
     const result = await invoke('update_settings', { serverBaseUrl: baseUrl });
-    activeServerElement.textContent = result.serverBaseUrl;
     setFeedback(`Server aktif: ${result.serverBaseUrl}`);
     setSettingsOverlayVisible(false);
   } catch (error) {
@@ -252,6 +249,24 @@ finishOverlay.addEventListener('click', (event) => {
     setFinishOverlayVisible(false);
   }
 });
+
+document.addEventListener(
+  'keydown',
+  (event) => {
+    if (event.key !== 'Escape') {
+      return;
+    }
+
+    const examModeActive = examShell.classList.contains('show');
+    if (!examModeActive) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+  },
+  true,
+);
 
 examFrame.addEventListener('load', () => {
   frameLoaded = true;
