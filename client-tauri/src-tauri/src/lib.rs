@@ -745,55 +745,7 @@ pub fn run() {
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
-        let global_shortcut_plugin_builder = tauri_plugin_global_shortcut::Builder::new()
-            .with_shortcut(Shortcut::new(
-                Some(Modifiers::CONTROL | Modifiers::SHIFT),
-                Code::KeyX,
-            ))
-            .expect("failed to register ctrl+shift+x global shortcut")
-            .with_shortcut(Shortcut::new(None, Code::Escape))
-            .expect("failed to register escape global shortcut")
-            .with_shortcut(Shortcut::new(None, Code::F1))
-            .expect("failed to register f1 global shortcut")
-            .with_shortcut(Shortcut::new(None, Code::F2))
-            .expect("failed to register f2 global shortcut")
-            .with_shortcut(Shortcut::new(None, Code::F3))
-            .expect("failed to register f3 global shortcut")
-            .with_shortcut(Shortcut::new(None, Code::F4))
-            .expect("failed to register f4 global shortcut")
-            .with_shortcut(Shortcut::new(None, Code::F5))
-            .expect("failed to register f5 global shortcut")
-            .with_shortcut(Shortcut::new(None, Code::F6))
-            .expect("failed to register f6 global shortcut")
-            .with_shortcut(Shortcut::new(None, Code::F7))
-            .expect("failed to register f7 global shortcut")
-            .with_shortcut(Shortcut::new(None, Code::F8))
-            .expect("failed to register f8 global shortcut")
-            .with_shortcut(Shortcut::new(None, Code::F9))
-            .expect("failed to register f9 global shortcut")
-            .with_shortcut(Shortcut::new(None, Code::F10))
-            .expect("failed to register f10 global shortcut")
-            .with_shortcut(Shortcut::new(None, Code::F11))
-            .expect("failed to register f11 global shortcut")
-            .with_shortcut(Shortcut::new(None, Code::F12))
-            .expect("failed to register f12 global shortcut")
-            .with_shortcut(Shortcut::new(Some(Modifiers::CONTROL), Code::KeyR))
-            .expect("failed to register ctrl+r global shortcut");
-
-        #[cfg(target_os = "macos")]
-        let global_shortcut_plugin_builder = global_shortcut_plugin_builder
-            .with_shortcut(Shortcut::new(Some(Modifiers::SUPER), Code::KeyR))
-            .expect("failed to register cmd+r global shortcut");
-
-        #[cfg(target_os = "macos")]
-        let global_shortcut_plugin_builder = global_shortcut_plugin_builder
-            .with_shortcut(Shortcut::new(
-                Some(Modifiers::SUPER | Modifiers::SHIFT),
-                Code::KeyX,
-            ))
-            .expect("failed to register cmd+shift+x global shortcut");
-
-        let global_shortcut_plugin = global_shortcut_plugin_builder
+        let global_shortcut_plugin = tauri_plugin_global_shortcut::Builder::new()
             .with_handler(|app, shortcut, event| {
                 if event.state != ShortcutState::Pressed {
                     return;
@@ -905,6 +857,44 @@ pub fn run() {
                 client_state: Mutex::new(loaded),
                 allow_exam_close: Mutex::new(true),
             });
+
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            {
+                use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+                let shortcuts = [
+                    Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyX),
+                    Shortcut::new(None, Code::Escape),
+                    Shortcut::new(None, Code::F1),
+                    Shortcut::new(None, Code::F2),
+                    Shortcut::new(None, Code::F3),
+                    Shortcut::new(None, Code::F4),
+                    Shortcut::new(None, Code::F5),
+                    Shortcut::new(None, Code::F6),
+                    Shortcut::new(None, Code::F7),
+                    Shortcut::new(None, Code::F8),
+                    Shortcut::new(None, Code::F9),
+                    Shortcut::new(None, Code::F10),
+                    Shortcut::new(None, Code::F11),
+                    Shortcut::new(None, Code::F12),
+                    Shortcut::new(Some(Modifiers::CONTROL), Code::KeyR),
+                ];
+
+                for shortcut in shortcuts {
+                    let _ = app.global_shortcut().register(shortcut);
+                }
+
+                #[cfg(target_os = "macos")]
+                {
+                    let _ = app
+                        .global_shortcut()
+                        .register(Shortcut::new(Some(Modifiers::SUPER), Code::KeyR));
+                    let _ = app.global_shortcut().register(Shortcut::new(
+                        Some(Modifiers::SUPER | Modifiers::SHIFT),
+                        Code::KeyX,
+                    ));
+                }
+            }
 
             set_android_exam_lock(&app.handle(), false);
 
