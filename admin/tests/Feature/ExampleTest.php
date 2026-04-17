@@ -103,4 +103,45 @@ class ExampleTest extends TestCase
         $this->assertStringContainsString('client_type=desktop_client', $submitUrl);
         $this->assertStringContainsString('device_id=device-123', $submitUrl);
     }
+
+    public function test_exam_player_preserves_client_identity_in_exam_url(): void
+    {
+        $user = User::factory()->create();
+
+        $exam = Exam::query()->create([
+            'title' => 'Ujian Player Client Identity',
+            'subject' => 'Teknologi',
+            'class_room' => '12-A',
+            'exam_url' => 'http://10.10.20.2:6997/?foo=bar',
+            'duration_minutes' => 90,
+            'is_active' => true,
+            'created_by' => $user->id,
+        ]);
+
+        $loginPage = $this->get('/?source=client&client_type=desktop_client&device_id=device-123')
+            ->assertOk();
+
+        preg_match('/<form method="post" action="([^"]+)">/', $loginPage->getContent(), $matches);
+        $submitUrl = html_entity_decode($matches[1] ?? '', ENT_QUOTES);
+
+        $loginSubmit = $this->post($submitUrl, [
+            'display_name' => 'Dokun',
+            'class_room' => '12-A',
+            'token_global' => $exam->token_global,
+        ])->assertRedirect();
+
+        $confirmUrl = $loginSubmit->headers->get('Location', '');
+        $this->assertStringContainsString('/exam-confirm?lt=', $confirmUrl);
+
+        $confirmPage = $this->get($confirmUrl)->assertOk();
+        preg_match('/<input type="hidden" name="lt" value="([^"]+)">/', $confirmPage->getContent(), $confirmMatch);
+        $launchToken = $confirmMatch[1] ?? '';
+
+        $this->assertNotSame('', $launchToken);
+
+        $playerPage = $this->get('/exam-gateway?lt='.$launchToken)->assertOk();
+        $playerHtml = $playerPage->getContent();
+
+        $this->assertStringContainsString('src="http://10.10.20.2:6997/?foo=bar&amp;source=client&amp;client_type=desktop_client&amp;device_id=device-123"', $playerHtml);
+    }
 }

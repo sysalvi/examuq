@@ -8,8 +8,8 @@ use App\Models\Exam;
 use App\Models\ExamSession;
 use App\Models\LaunchToken;
 use Carbon\Carbon;
-use Illuminate\Http\Request;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
 use Illuminate\View\View;
 
 class ExamGatewayController extends Controller
@@ -85,6 +85,7 @@ class ExamGatewayController extends Controller
             'exam' => $exam,
             'examSession' => $examSession,
             'launchToken' => $launchToken,
+            'playerUrl' => $this->appendClientIdentityToExamUrl($exam->exam_url, $examSession),
             'deadlineAtIso' => $deadlineAt?->toIso8601String(),
             'serverNowIso' => Carbon::now()->toIso8601String(),
         ]);
@@ -93,5 +94,21 @@ class ExamGatewayController extends Controller
     public function blocked(): View
     {
         return view('exam.blocked');
+    }
+
+    private function appendClientIdentityToExamUrl(string $examUrl, ExamSession $examSession): string
+    {
+        $separator = str_contains($examUrl, '?') ? '&' : '?';
+
+        $query = [
+            'source' => $examSession->client_type === 'chrome_extension' ? 'extension' : 'client',
+            'client_type' => $examSession->client_type ?: 'desktop_client',
+        ];
+
+        if (is_string($examSession->device_id) && $examSession->device_id !== '') {
+            $query['device_id'] = $examSession->device_id;
+        }
+
+        return $examUrl.$separator.http_build_query($query);
     }
 }

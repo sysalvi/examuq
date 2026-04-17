@@ -162,7 +162,7 @@
     </header>
 
     <main class="frame-wrap" role="main" aria-label="Exam player">
-        <iframe id="examFrame" src="{{ $exam->exam_url }}" allowfullscreen></iframe>
+        <iframe id="examFrame" src="{{ $playerUrl }}" allowfullscreen></iframe>
     </main>
 </div>
 
