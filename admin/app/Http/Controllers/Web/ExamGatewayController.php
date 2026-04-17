@@ -14,6 +14,8 @@ use Illuminate\View\View;
 
 class ExamGatewayController extends Controller
 {
+    private const RETURN_TO_LAUNCHER_URL = 'https://return.examuq.invalid/launcher';
+
     public function confirm(Request $request): View|RedirectResponse
     {
         $launchToken = $request->attributes->get('launchToken');
@@ -86,6 +88,8 @@ class ExamGatewayController extends Controller
             'examSession' => $examSession,
             'launchToken' => $launchToken,
             'playerUrl' => $this->appendClientIdentityToExamUrl($exam->exam_url, $examSession),
+            'returnToLauncherUrl' => self::RETURN_TO_LAUNCHER_URL,
+            'fullscreenRequired' => $examSession->client_type !== 'desktop_client',
             'deadlineAtIso' => $deadlineAt?->toIso8601String(),
             'serverNowIso' => Carbon::now()->toIso8601String(),
         ]);

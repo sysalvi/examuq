@@ -180,8 +180,8 @@ async function finishExamSession() {
     });
 }
 
-window.__EXAMUQ_RETURN_TO_LAUNCHER__ = () => {
-  returnToLauncherUi('Mode ujian dihentikan oleh tombol darurat.');
+window.__EXAMUQ_RETURN_TO_LAUNCHER__ = (message = 'Mode ujian dihentikan dan kembali ke halaman awal.') => {
+  returnToLauncherUi(message);
 };
 
 async function maybeCheckForUpdates() {
@@ -252,13 +252,7 @@ async function startExam() {
       return;
     }
 
-    const launchUrl = buildLaunchUrl(result.serverBaseUrl);
-    setExamMode(true);
-    beginExamFrameLoading();
-
-    examFrame.src = launchUrl;
-
-    setFeedback(`Portal dibuka: ${launchUrl}`);
+    setFeedback('Portal siswa dibuka di jendela ujian.');
   } catch (error) {
     setFeedback(`Gagal membuka portal siswa: ${String(error)}`, true);
   } finally {

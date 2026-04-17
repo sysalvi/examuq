@@ -143,5 +143,45 @@ class ExampleTest extends TestCase
         $playerHtml = $playerPage->getContent();
 
         $this->assertStringContainsString('src="http://10.10.20.2:6997/?foo=bar&amp;source=client&amp;client_type=desktop_client&amp;device_id=device-123"', $playerHtml);
+        $this->assertStringContainsString('https://return.examuq.invalid/launcher', $playerHtml);
+        $this->assertStringContainsString('data-fullscreen-required="0"', $playerHtml);
+    }
+
+    public function test_exam_player_keeps_fullscreen_guard_for_extension_client(): void
+    {
+        $user = User::factory()->create();
+
+        $exam = Exam::query()->create([
+            'title' => 'Ujian Extension Fullscreen Guard',
+            'subject' => 'Teknologi',
+            'class_room' => '12-A',
+            'exam_url' => 'http://10.10.20.2:6997/',
+            'duration_minutes' => 90,
+            'is_active' => true,
+            'created_by' => $user->id,
+        ]);
+
+        $loginPage = $this->get('/?source=extension&client_type=chrome_extension&device_id=ext-1')
+            ->assertOk();
+
+        preg_match('/<form method="post" action="([^"]+)">/', $loginPage->getContent(), $matches);
+        $submitUrl = html_entity_decode($matches[1] ?? '', ENT_QUOTES);
+
+        $loginSubmit = $this->post($submitUrl, [
+            'display_name' => 'Dokun',
+            'class_room' => '12-A',
+            'token_global' => $exam->token_global,
+        ])->assertRedirect();
+
+        $confirmUrl = $loginSubmit->headers->get('Location', '');
+        $confirmPage = $this->get($confirmUrl)->assertOk();
+        preg_match('/<input type="hidden" name="lt" value="([^"]+)">/', $confirmPage->getContent(), $confirmMatch);
+        $launchToken = $confirmMatch[1] ?? '';
+
+        $playerPage = $this->get('/exam-gateway?lt='.$launchToken)->assertOk();
+        $playerHtml = $playerPage->getContent();
+
+        $this->assertStringContainsString('data-fullscreen-required="1"', $playerHtml);
+        $this->assertStringContainsString('client_type=chrome_extension', $playerHtml);
     }
 }

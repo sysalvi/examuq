@@ -186,6 +186,8 @@
     data-session-id="{{ $examSession->id }}"
     data-deadline-at="{{ $deadlineAtIso ?? '' }}"
     data-server-now="{{ $serverNowIso }}"
+    data-return-url="{{ $returnToLauncherUrl }}"
+    data-fullscreen-required="{{ $fullscreenRequired ? '1' : '0' }}"
 ></div>
 
 <script>
@@ -193,6 +195,8 @@
     const sessionId = Number(playerConfigElement?.dataset.sessionId || 0);
     const deadlineAtIso = playerConfigElement?.dataset.deadlineAt || null;
     const serverNowIso = playerConfigElement?.dataset.serverNow || new Date().toISOString();
+    const returnToLauncherUrl = playerConfigElement?.dataset.returnUrl || '';
+    const fullscreenRequired = playerConfigElement?.dataset.fullscreenRequired === '1';
 
     const timerElement = document.getElementById('timer');
     const endButton = document.getElementById('endButton');
@@ -220,12 +224,37 @@
         overlayElement.classList.add('show');
     }
 
+    function returnToLauncher(message) {
+        if (!returnToLauncherUrl) {
+            showOverlay(message);
+            return;
+        }
+
+        try {
+            const url = new URL(returnToLauncherUrl);
+            url.searchParams.set('message', message);
+            window.location.replace(url.toString());
+        } catch (_error) {
+            showOverlay(message);
+        }
+    }
+
     function setFrameBlocked(blocked) {
+        if (!fullscreenRequired) {
+            frameWrap.classList.remove('blocked');
+            fullscreenGuardElement.classList.remove('show');
+            return;
+        }
+
         frameWrap.classList.toggle('blocked', blocked);
         fullscreenGuardElement.classList.toggle('show', blocked && !ended);
     }
 
     async function requestFullscreen() {
+        if (!fullscreenRequired) {
+            return true;
+        }
+
         if (document.fullscreenElement) {
             return true;
         }
@@ -268,15 +297,20 @@
         setFrameBlocked(false);
 
         if (reason === 'timeout') {
-            showOverlay('Waktu ujian habis. Sesi Anda telah ditutup otomatis.');
+            returnToLauncher('Waktu ujian habis. Kembali ke halaman awal.');
             return;
         }
 
-        showOverlay('Sesi ujian ditutup. Anda dapat menutup halaman ini.');
+        if (reason === 'manual_end_by_student') {
+            returnToLauncher('Sesi ujian selesai. Kembali ke halaman awal.');
+            return;
+        }
+
+        returnToLauncher('Sesi ujian ditutup. Kembali ke halaman awal.');
     }
 
     async function handleFullscreenGuard(forceMessage = null) {
-        if (ended || !fullscreenArmed) {
+        if (!fullscreenRequired || ended || !fullscreenArmed) {
             return;
         }
 
@@ -387,6 +421,11 @@
     }
 
     function startFullscreenEnforcement() {
+        if (!fullscreenRequired) {
+            setFrameBlocked(false);
+            return;
+        }
+
         const onFullscreenChange = () => {
             if (fullscreenChangeTimerId) {
                 window.clearTimeout(fullscreenChangeTimerId);

@@ -11,7 +11,7 @@ use std::{
 };
 #[cfg(target_os = "macos")]
 use tauri::ActivationPolicy;
-use tauri::{AppHandle, Manager, RunEvent, State, WebviewWindow, WindowEvent};
+use tauri::{AppHandle, Manager, RunEvent, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
 use tauri_plugin_updater::UpdaterExt;
@@ -21,7 +21,10 @@ const DEFAULT_SERVER_BASE_URL: &str = "http://10.10.20.2:6997";
 const LEGACY_SERVER_BASE_URL: &str = "http://10.10.20.2:6996";
 const LEGACY_SERVER_HOSTS: [&str; 1] = ["kreasai.com"];
 const STATE_FILE_NAME: &str = "client-state.json";
-const EXAM_WINDOW_LABEL: &str = "main";
+const LAUNCHER_WINDOW_LABEL: &str = "main";
+const EXAM_WINDOW_LABEL: &str = "exam";
+const RETURN_TO_LAUNCHER_HOST: &str = "return.examuq.invalid";
+const RETURN_TO_LAUNCHER_PATH: &str = "/launcher";
 const END_SESSION_EVAL_DELAY_MS: u64 = 260;
 #[cfg(target_os = "android")]
 const ANDROID_EXAM_LOCK_FILE: &str = "exam-kiosk.lock";
@@ -351,14 +354,106 @@ fn exam_kiosk_is_active(app: &AppHandle, state: &RuntimeState) -> bool {
     exam_window_is_locked(state) && app.get_webview_window(EXAM_WINDOW_LABEL).is_some()
 }
 
+fn launcher_window(app: &AppHandle) -> Result<WebviewWindow, String> {
+    app.get_webview_window(LAUNCHER_WINDOW_LABEL)
+        .ok_or_else(|| "Main window tidak ditemukan.".to_string())
+}
+
+fn is_return_to_launcher_url(url: &Url) -> bool {
+    url.scheme() == "https"
+        && url.host_str() == Some(RETURN_TO_LAUNCHER_HOST)
+        && url.path() == RETURN_TO_LAUNCHER_PATH
+}
+
+fn return_message_from_url(url: &Url) -> String {
+    url.query_pairs()
+        .find_map(|(key, value)| (key == "message").then(|| value.into_owned()))
+        .filter(|message| !message.trim().is_empty())
+        .unwrap_or_else(|| "Mode ujian dihentikan dan kembali ke halaman awal.".to_string())
+}
+
+fn build_exam_launch_url(server_base_url: &str, device_id: &str) -> Result<Url, String> {
+    let mut launch_url = Url::parse(&format!("{}/", server_base_url.trim_end_matches('/')))
+        .map_err(|_| "URL server tidak valid.".to_string())?;
+
+    launch_url
+        .query_pairs_mut()
+        .append_pair("source", "client")
+        .append_pair("client_type", "desktop_client")
+        .append_pair("device_id", device_id);
+
+    Ok(launch_url)
+}
+
+fn open_exam_window(app: &AppHandle, state: &RuntimeState, launch_url: Url) -> Result<(), String> {
+    {
+        let mut allow_close = state
+            .allow_exam_close
+            .lock()
+            .map_err(|_| "State lock error")?;
+        *allow_close = false;
+    }
+
+    let launcher = launcher_window(app)?;
+    let _ = launcher.hide();
+
+    let exam_window = if let Some(existing) = app.get_webview_window(EXAM_WINDOW_LABEL) {
+        let _ = existing.navigate(launch_url.clone());
+        existing
+    } else {
+        let app_handle = app.clone();
+
+        WebviewWindowBuilder::new(app, EXAM_WINDOW_LABEL, WebviewUrl::External(launch_url.clone()))
+            .title("ExamUQ Client - Ujian")
+            .resizable(false)
+            .fullscreen(true)
+            .decorations(false)
+            .focused(true)
+            .visible(true)
+            .on_navigation(move |url| {
+                if !is_return_to_launcher_url(url) {
+                    return true;
+                }
+
+                if let Some(state) = app_handle.try_state::<RuntimeState>() {
+                    let _ = return_to_launcher_runtime(
+                        &app_handle,
+                        &state,
+                        &return_message_from_url(url),
+                    );
+                }
+
+                false
+            })
+            .build()
+            .map_err(|e| format!("Gagal membuka jendela ujian: {e}"))?
+    };
+
+    activate_exam_kiosk(&exam_window);
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let _ = exam_window.set_title("ExamUQ Client - Ujian");
+        let _ = exam_window.show();
+        let _ = exam_window.set_focus();
+    }
+
+    apply_macos_exam_presentation_lock(app, true);
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.set_activation_policy(ActivationPolicy::Regular);
+        let _ = app.set_dock_visibility(true);
+    }
+
+    Ok(())
+}
+
 fn return_to_launcher_runtime(
     app: &AppHandle,
     state: &RuntimeState,
     reason: &str,
 ) -> Result<(), String> {
-    let main_window = app
-        .get_webview_window(EXAM_WINDOW_LABEL)
-        .ok_or_else(|| "Main window tidak ditemukan.".to_string())?;
+    let launcher = launcher_window(app)?;
 
     {
         let mut allow_close = state
@@ -368,10 +463,16 @@ fn return_to_launcher_runtime(
         *allow_close = true;
     }
 
-    restore_launcher_window(&main_window);
+    if let Some(exam_window) = app.get_webview_window(EXAM_WINDOW_LABEL) {
+        let _ = exam_window.close();
+    }
+
+    restore_launcher_window(&launcher);
     apply_macos_exam_presentation_lock(app, false);
-    let _ = main_window
-        .eval("window.__EXAMUQ_RETURN_TO_LAUNCHER__ && window.__EXAMUQ_RETURN_TO_LAUNCHER__();");
+    let payload = serde_json::to_string(reason).unwrap_or_else(|_| "\"\"".to_string());
+    let _ = launcher.eval(&format!(
+        "window.__EXAMUQ_RETURN_TO_LAUNCHER__ && window.__EXAMUQ_RETURN_TO_LAUNCHER__({payload});"
+    ));
     write_runtime_log(app, reason);
 
     Ok(())
@@ -583,46 +684,12 @@ fn open_exam_direct(
         (base, guard.device_id.clone())
     };
 
-    {
-        let mut allow_close = state
-            .allow_exam_close
-            .lock()
-            .map_err(|_| "State lock error")?;
-        *allow_close = false;
-    }
-
-    let mut parsed = Url::parse(&format!("{}/", resolved_base_url.trim_end_matches('/')))
-        .map_err(|_| "URL server tidak valid.")?;
-    parsed
-        .query_pairs_mut()
-        .append_pair("source", "client")
-        .append_pair("client_type", "desktop_client")
-        .append_pair("device_id", &device_id);
+    let parsed = build_exam_launch_url(&resolved_base_url, &device_id)?;
     let launch_url = parsed.to_string();
 
     write_runtime_log(&app, &format!("open_exam_direct launch_url={launch_url}"));
 
-    let main_window = app
-        .get_webview_window(EXAM_WINDOW_LABEL)
-        .ok_or_else(|| "Main window tidak ditemukan.".to_string())?;
-
-    let _ = main_window.navigate(parsed);
-    activate_exam_kiosk(&main_window);
-
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        let _ = main_window.set_title("ExamUQ Client - Ujian");
-        let _ = main_window.show();
-        let _ = main_window.set_focus();
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let _ = app.set_activation_policy(ActivationPolicy::Regular);
-        let _ = app.set_dock_visibility(true);
-    }
-
-    Ok(())
+    open_exam_window(&app, &state, parsed)
 }
 
 #[tauri::command]
@@ -717,43 +784,11 @@ async fn start_exam(
         (guard.server_base_url.clone(), guard.device_id.clone())
     };
 
-    {
-        let mut allow_close = state
-            .allow_exam_close
-            .lock()
-            .map_err(|_| "State lock error")?;
-        *allow_close = true;
-    }
+    let launch_url = build_exam_launch_url(&server_base_url, &device_id)?;
+    let launch_url_string = launch_url.to_string();
+    write_runtime_log(&app, &format!("start_exam launch_url={launch_url_string}"));
 
-    let mut launch_url = Url::parse(&format!("{}/", server_base_url.trim_end_matches('/')))
-        .map_err(|_| "URL server tidak valid.")?;
-    launch_url
-        .query_pairs_mut()
-        .append_pair("source", "client")
-        .append_pair("client_type", "desktop_client")
-        .append_pair("device_id", &device_id);
-    let launch_url = launch_url.to_string();
-    write_runtime_log(&app, &format!("start_exam launch_url={launch_url}"));
-
-    let main_window = app
-        .get_webview_window(EXAM_WINDOW_LABEL)
-        .ok_or_else(|| "Main window tidak ditemukan.".to_string())?;
-
-    activate_exam_kiosk(&main_window);
-
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        let _ = main_window.set_title("ExamUQ Client - Ujian");
-        let _ = main_window.show();
-        let _ = main_window.set_focus();
-    }
-
-    apply_macos_exam_presentation_lock(&app, true);
-    #[cfg(target_os = "macos")]
-    {
-        let _ = app.set_activation_policy(ActivationPolicy::Regular);
-        let _ = app.set_dock_visibility(true);
-    }
+    open_exam_window(&app, &state, launch_url)?;
 
     Ok(StartExamResponse {
         ok: true,
