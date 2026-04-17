@@ -9,7 +9,7 @@ Route::get('/', [StudentLoginController::class, 'show'])
     ->name('student.login');
 
 Route::post('/student/login', [StudentLoginController::class, 'submit'])
-    ->middleware('examuq.client')
+    ->middleware(['signed', 'examuq.client'])
     ->name('student.login.submit');
 
 Route::get('/exam-confirm', [ExamGatewayController::class, 'confirm'])

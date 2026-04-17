@@ -10,13 +10,22 @@ use Carbon\Carbon;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\URL;
 use Illuminate\View\View;
 
 class StudentLoginController extends Controller
 {
-    public function show(): View
+    private const LOGIN_SUBMIT_SIGNATURE_MINUTES = 10;
+
+    public function show(Request $request): View
     {
-        return view('exam.student-login');
+        return view('exam.student-login', [
+            'submitUrl' => URL::temporarySignedRoute(
+                'student.login.submit',
+                now()->addMinutes(self::LOGIN_SUBMIT_SIGNATURE_MINUTES),
+                $this->signedSubmitParameters($request)
+            ),
+        ]);
     }
 
     public function submit(Request $request): RedirectResponse
@@ -78,5 +87,22 @@ class StudentLoginController extends Controller
         return redirect()->route('exam.confirm', [
             'lt' => $rawToken,
         ]);
+    }
+
+    private function signedSubmitParameters(Request $request): array
+    {
+        $clientType = (string) $request->attributes->get('examuqClientType');
+        $deviceId = $request->attributes->get('examuqDeviceId');
+
+        $parameters = [
+            'source' => $clientType === 'chrome_extension' ? 'extension' : 'client',
+            'client_type' => $clientType !== '' ? $clientType : 'desktop_client',
+        ];
+
+        if (is_string($deviceId) && $deviceId !== '') {
+            $parameters['device_id'] = $deviceId;
+        }
+
+        return $parameters;
     }
 }

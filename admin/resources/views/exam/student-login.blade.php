@@ -271,7 +271,7 @@
         </div>
         <p class="subtitle">Isi data kamu dulu. Kalau token benar, kamu lanjut ke halaman konfirmasi sebelum mulai mengerjakan.</p>
 
-        <form method="post" action="{{ route('student.login.submit') }}">
+        <form method="post" action="{{ $submitUrl }}">
             @csrf
 
             <div class="field">
