@@ -48,7 +48,12 @@ jobs:
           EXAMUQ_UPDATER_ENDPOINT_TEMPLATE: https://updates.examuq.id/{{target}}/{{arch}}/{{current_version}}?channel={channel}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run build
+        run: |
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            npm run tauri build -- --bundles dmg
+          else
+            npm run build
+          fi
 
       - name: Upload macOS artifact
         if: matrix.os == 'macos-latest'
@@ -56,7 +61,7 @@ jobs:
         with:
           name: examuq-client-tauri-macos
           path: |
-            client-tauri/src-tauri/target/release/bundle/macos/*.app
+            client-tauri/src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
           retention-days: 7
 
