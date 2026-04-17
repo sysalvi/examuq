@@ -547,9 +547,16 @@ fn update_settings(
 #[tauri::command]
 fn open_admin(state: State<'_, RuntimeState>) -> Result<(), String> {
     let guard = state.client_state.lock().map_err(|_| "State lock error")?;
-    let admin_url = format!("{}/admin", guard.server_base_url);
+    let mut admin_url = Url::parse(&format!("{}/admin", guard.server_base_url.trim_end_matches('/')))
+        .map_err(|_| "URL server tidak valid.")?;
 
-    open::that(admin_url).map_err(|e| format!("Gagal membuka admin: {e}"))
+    admin_url
+        .query_pairs_mut()
+        .append_pair("source", "client")
+        .append_pair("client_type", "desktop_client")
+        .append_pair("device_id", &guard.device_id);
+
+    open::that(admin_url.to_string()).map_err(|e| format!("Gagal membuka admin: {e}"))
 }
 
 #[tauri::command]
@@ -565,11 +572,15 @@ fn open_exam_direct(
         );
     }
 
-    let resolved_base_url = if let Some(raw) = server_base_url {
-        normalize_base_url(&raw)?
-    } else {
+    let (resolved_base_url, device_id) = {
         let guard = state.client_state.lock().map_err(|_| "State lock error")?;
-        guard.server_base_url.clone()
+        let base = if let Some(raw) = server_base_url {
+            normalize_base_url(&raw)?
+        } else {
+            guard.server_base_url.clone()
+        };
+
+        (base, guard.device_id.clone())
     };
 
     {
@@ -580,8 +591,14 @@ fn open_exam_direct(
         *allow_close = false;
     }
 
-    let launch_url = format!("{}/", resolved_base_url.trim_end_matches('/'));
-    let parsed = Url::parse(&launch_url).map_err(|_| "URL server tidak valid.")?;
+    let mut parsed = Url::parse(&format!("{}/", resolved_base_url.trim_end_matches('/')))
+        .map_err(|_| "URL server tidak valid.")?;
+    parsed
+        .query_pairs_mut()
+        .append_pair("source", "client")
+        .append_pair("client_type", "desktop_client")
+        .append_pair("device_id", &device_id);
+    let launch_url = parsed.to_string();
 
     write_runtime_log(&app, &format!("open_exam_direct launch_url={launch_url}"));
 
@@ -695,9 +712,9 @@ async fn start_exam(
         );
     }
 
-    let server_base_url = {
+    let (server_base_url, device_id) = {
         let guard = state.client_state.lock().map_err(|_| "State lock error")?;
-        guard.server_base_url.clone()
+        (guard.server_base_url.clone(), guard.device_id.clone())
     };
 
     {
@@ -708,8 +725,14 @@ async fn start_exam(
         *allow_close = true;
     }
 
-    let launch_url = format!("{}/", server_base_url.trim_end_matches('/'));
-    let _ = Url::parse(&launch_url).map_err(|_| "URL server tidak valid.")?;
+    let mut launch_url = Url::parse(&format!("{}/", server_base_url.trim_end_matches('/')))
+        .map_err(|_| "URL server tidak valid.")?;
+    launch_url
+        .query_pairs_mut()
+        .append_pair("source", "client")
+        .append_pair("client_type", "desktop_client")
+        .append_pair("device_id", &device_id);
+    let launch_url = launch_url.to_string();
     write_runtime_log(&app, &format!("start_exam launch_url={launch_url}"));
 
     let main_window = app

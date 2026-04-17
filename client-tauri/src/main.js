@@ -29,6 +29,7 @@ let frameLoadTimeout;
 let startExamInFlight = false;
 let frameLoaded = false;
 let settingsUnlocked = false;
+let currentDeviceId = '';
 const FRAME_LOAD_TIMEOUT_MS = 10000;
 
 function isBlockedFunctionKey(key) {
@@ -110,9 +111,21 @@ function setFinishOverlayVisible(visible) {
 
 function buildLaunchUrl(serverBaseUrl) {
   try {
-    return new URL('/', serverBaseUrl).toString();
+    const launchUrl = new URL('/', serverBaseUrl);
+    launchUrl.searchParams.set('source', 'client');
+    launchUrl.searchParams.set('client_type', 'desktop_client');
+    if (currentDeviceId) {
+      launchUrl.searchParams.set('device_id', currentDeviceId);
+    }
+    return launchUrl.toString();
   } catch {
-    return `${serverBaseUrl.replace(/\/+$/, '')}/`;
+    const fallback = new URL(`${serverBaseUrl.replace(/\/+$/, '')}/`);
+    fallback.searchParams.set('source', 'client');
+    fallback.searchParams.set('client_type', 'desktop_client');
+    if (currentDeviceId) {
+      fallback.searchParams.set('device_id', currentDeviceId);
+    }
+    return fallback.toString();
   }
 }
 
@@ -215,6 +228,7 @@ async function hydrateState() {
     }
 
     if (state?.deviceId) {
+      currentDeviceId = state.deviceId;
       deviceIdElement.textContent = state.deviceId;
     }
   } catch (error) {
