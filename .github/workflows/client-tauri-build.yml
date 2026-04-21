@@ -51,6 +51,22 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build -- --bundles dmg
 
+      - name: Prepare macOS helper package
+        if: matrix.os == 'macos-latest'
+        run: |
+          mkdir -p src-tauri/target/release/bundle/macos-support
+          cp src-tauri/bundle/macos/README_MACOS.txt src-tauri/target/release/bundle/macos-support/
+          cp src-tauri/bundle/macos/FIX_MACOS.command src-tauri/target/release/bundle/macos-support/
+          chmod +x src-tauri/target/release/bundle/macos-support/FIX_MACOS.command
+
+          version=$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json', 'r', encoding='utf-8'))['version'])")
+
+          mkdir -p src-tauri/target/release/bundle/macos-distribution
+          cp src-tauri/target/release/bundle/dmg/*.dmg src-tauri/target/release/bundle/macos-distribution/
+          cp src-tauri/target/release/bundle/macos-support/* src-tauri/target/release/bundle/macos-distribution/
+          cd src-tauri/target/release/bundle/macos-distribution
+          zip -r "ExamUQ Client_${version}_macos_with_help.zip" .
+
       - name: Build Tauri app (Windows)
         if: matrix.os == 'windows-latest'
         env:
@@ -103,6 +119,8 @@ jobs:
           name: examuq-client-tauri-macos
           path: |
             client-tauri/src-tauri/target/release/bundle/dmg/*.dmg
+            client-tauri/src-tauri/target/release/bundle/macos-support/*
+            client-tauri/src-tauri/target/release/bundle/macos-distribution/*.zip
           if-no-files-found: error
           retention-days: 7
 

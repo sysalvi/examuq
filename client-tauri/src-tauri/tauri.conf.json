@@ -34,6 +34,12 @@
       "app",
       "nsis"
     ],
+    "macOS": {
+      "files": {
+        "SharedSupport/README_MACOS.txt": "bundle/macos/README_MACOS.txt",
+        "SharedSupport/FIX_MACOS.command": "bundle/macos/FIX_MACOS.command"
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
