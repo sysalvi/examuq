@@ -1,19 +1,16 @@
-ExamUQ Client macOS helper
+Panduan macOS untuk ExamUQ Client
 
-If macOS says the app is damaged or cannot be opened, do this:
+Jika macOS menampilkan pesan bahwa aplikasi rusak atau tidak bisa dibuka, lakukan langkah berikut:
 
-1. Drag "ExamUQ Client.app" into Applications.
-2. Open Terminal.
-3. Run this command:
+1. Pindahkan "ExamUQ Client.app" ke folder Applications.
+2. Klik dua kali file "jalankan.command".
+3. Jika diminta izin, lanjutkan saja.
+4. Setelah proses selesai, aplikasi akan dibuka otomatis.
 
-   xattr -dr com.apple.quarantine "/Applications/ExamUQ Client.app"
+Jika ingin menjalankan manual lewat Terminal, gunakan perintah berikut:
 
-4. Open the app again.
+  xattr -dr com.apple.quarantine "/Applications/ExamUQ Client.app"
 
-Optional:
-- You can also double-click FIX_MACOS.command after moving the app to Applications.
-- If you keep the app outside Applications, edit the path in the command accordingly.
-
-Notes:
-- This helper exists because the app is not signed/notarized with Apple Developer.
-- The safest long-term fix is Apple notarization, but this helper is the current workaround.
+Catatan:
+- Bantuan ini disediakan karena aplikasi belum ditandatangani / notarized oleh Apple Developer.
+- Solusi paling rapi jangka panjang tetap notarization Apple, tetapi untuk saat ini file ini adalah solusi bantu yang paling praktis.

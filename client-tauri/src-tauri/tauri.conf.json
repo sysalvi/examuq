@@ -37,7 +37,7 @@
     "macOS": {
       "files": {
         "SharedSupport/README_MACOS.txt": "bundle/macos/README_MACOS.txt",
-        "SharedSupport/FIX_MACOS.command": "bundle/macos/FIX_MACOS.command"
+        "SharedSupport/jalankan.command": "bundle/macos/jalankan.command"
       }
     },
     "icon": [

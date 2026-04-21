@@ -56,8 +56,8 @@ jobs:
         run: |
           mkdir -p src-tauri/target/release/bundle/macos-support
           cp src-tauri/bundle/macos/README_MACOS.txt src-tauri/target/release/bundle/macos-support/
-          cp src-tauri/bundle/macos/FIX_MACOS.command src-tauri/target/release/bundle/macos-support/
-          chmod +x src-tauri/target/release/bundle/macos-support/FIX_MACOS.command
+          cp src-tauri/bundle/macos/jalankan.command src-tauri/target/release/bundle/macos-support/
+          chmod +x src-tauri/target/release/bundle/macos-support/jalankan.command
 
           version=$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json', 'r', encoding='utf-8'))['version'])")
 
