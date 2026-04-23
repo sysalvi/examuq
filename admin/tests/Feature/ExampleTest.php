@@ -104,7 +104,7 @@ class ExampleTest extends TestCase
         $this->assertStringContainsString('device_id=device-123', $submitUrl);
     }
 
-    public function test_exam_player_preserves_client_identity_in_exam_url(): void
+    public function test_exam_gateway_redirects_directly_with_client_identity(): void
     {
         $user = User::factory()->create();
 
@@ -139,15 +139,14 @@ class ExampleTest extends TestCase
 
         $this->assertNotSame('', $launchToken);
 
-        $playerPage = $this->get('/exam-gateway?lt='.$launchToken)->assertOk();
-        $playerHtml = $playerPage->getContent();
+        $gatewayResponse = $this->get('/exam-gateway?lt='.$launchToken);
+        $gatewayResponse->assertRedirect();
 
-        $this->assertStringContainsString('src="http://10.10.20.2:6997/?foo=bar&amp;source=client&amp;client_type=desktop_client&amp;device_id=device-123"', $playerHtml);
-        $this->assertStringContainsString('https://return.examuq.invalid/launcher', $playerHtml);
-        $this->assertStringContainsString('data-fullscreen-required="0"', $playerHtml);
+        $target = $gatewayResponse->headers->get('Location', '');
+        $this->assertStringContainsString('http://10.10.20.2:6997/?foo=bar&source=client&client_type=desktop_client&device_id=device-123', $target);
     }
 
-    public function test_exam_player_keeps_fullscreen_guard_for_extension_client(): void
+    public function test_exam_gateway_redirects_directly_for_extension_client(): void
     {
         $user = User::factory()->create();
 
@@ -178,10 +177,10 @@ class ExampleTest extends TestCase
         preg_match('/<input type="hidden" name="lt" value="([^"]+)">/', $confirmPage->getContent(), $confirmMatch);
         $launchToken = $confirmMatch[1] ?? '';
 
-        $playerPage = $this->get('/exam-gateway?lt='.$launchToken)->assertOk();
-        $playerHtml = $playerPage->getContent();
+        $gatewayResponse = $this->get('/exam-gateway?lt='.$launchToken);
+        $gatewayResponse->assertRedirect();
 
-        $this->assertStringContainsString('data-fullscreen-required="1"', $playerHtml);
-        $this->assertStringContainsString('client_type=chrome_extension', $playerHtml);
+        $target = $gatewayResponse->headers->get('Location', '');
+        $this->assertStringContainsString('http://10.10.20.2:6997/?source=extension&client_type=chrome_extension&device_id=ext-1', $target);
     }
 }
