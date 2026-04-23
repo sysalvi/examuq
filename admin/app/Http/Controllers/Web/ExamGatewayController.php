@@ -14,6 +14,8 @@ use Illuminate\View\View;
 
 class ExamGatewayController extends Controller
 {
+    private const RETURN_TO_LAUNCHER_URL = 'https://return.examuq.invalid/launcher';
+
     public function confirm(Request $request): View|RedirectResponse
     {
         $launchToken = $request->attributes->get('launchToken');
@@ -81,7 +83,12 @@ class ExamGatewayController extends Controller
             ],
         ]);
 
-        return redirect()->away($this->appendClientIdentityToExamUrl($exam->exam_url, $examSession));
+        return redirect()->away($this->appendClientIdentityToExamUrl(
+            $exam->exam_url,
+            $examSession,
+            $deadlineAt,
+            $request
+        ));
     }
 
     public function blocked(): View
@@ -89,7 +96,12 @@ class ExamGatewayController extends Controller
         return view('exam.blocked');
     }
 
-    private function appendClientIdentityToExamUrl(string $examUrl, ExamSession $examSession): string
+    private function appendClientIdentityToExamUrl(
+        string $examUrl,
+        ExamSession $examSession,
+        ?Carbon $deadlineAt,
+        Request $request
+    ): string
     {
         $separator = str_contains($examUrl, '?') ? '&' : '?';
 
@@ -102,6 +114,14 @@ class ExamGatewayController extends Controller
             $query['device_id'] = $examSession->device_id;
         }
 
-        return $examUrl.$separator.http_build_query($query);
+        $overlay = [
+            'examuq_session_id' => (string) $examSession->id,
+            'examuq_display_name' => (string) $examSession->display_name,
+            'examuq_deadline_at' => $deadlineAt?->toIso8601String() ?? '',
+            'examuq_api_base' => rtrim($request->getSchemeAndHttpHost(), '/'),
+            'examuq_return_url' => self::RETURN_TO_LAUNCHER_URL,
+        ];
+
+        return $examUrl.$separator.http_build_query(array_merge($query, $overlay));
     }
 }

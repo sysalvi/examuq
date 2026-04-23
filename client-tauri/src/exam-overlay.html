@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ExamUQ Overlay</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+
+      * {
+        box-sizing: border-box;
+        user-select: none;
+      }
+
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+        background: rgba(15, 23, 42, 0.96);
+        color: #f8fafc;
+      }
+
+      .bar {
+        height: 58px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px 12px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+        box-shadow: 0 6px 20px rgba(2, 6, 23, 0.35);
+      }
+
+      .left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+      }
+
+      .badge {
+        font-size: 10px;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: .08em;
+        color: #e2e8f0;
+        border: 1px solid rgba(148, 163, 184, 0.45);
+        border-radius: 999px;
+        padding: 4px 8px;
+        background: rgba(30, 41, 59, 0.9);
+      }
+
+      .name {
+        font-size: 13px;
+        font-weight: 700;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 44vw;
+      }
+
+      .right {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .timer {
+        min-width: 96px;
+        text-align: center;
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: .04em;
+        border: 1px solid rgba(148, 163, 184, 0.45);
+        border-radius: 8px;
+        padding: 6px 10px;
+        background: rgba(30, 41, 59, 0.9);
+      }
+
+      .end {
+        border: 1px solid rgba(248, 113, 113, 0.55);
+        background: linear-gradient(180deg, rgba(239, 68, 68, 0.95), rgba(220, 38, 38, 0.95));
+        color: #fff;
+        font-size: 12px;
+        font-weight: 700;
+        padding: 8px 12px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+
+      .end:hover {
+        filter: brightness(1.06);
+      }
+
+      .end:active {
+        transform: translateY(1px);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bar">
+      <div class="left">
+        <span class="badge">Mode Ujian</span>
+        <span id="name" class="name">Memuat sesi...</span>
+      </div>
+      <div class="right">
+        <span id="timer" class="timer">--:--</span>
+        <button id="end" class="end" type="button">Akhiri Sesi</button>
+      </div>
+    </div>
+
+    <script>
+      const invoke = window.__TAURI__?.core?.invoke;
+
+      const state = {
+        deadlineMs: NaN,
+      };
+
+      const nameEl = document.getElementById('name');
+      const timerEl = document.getElementById('timer');
+      const endButton = document.getElementById('end');
+
+      async function endSession() {
+        if (!invoke) {
+          return;
+        }
+
+        try {
+          await invoke('finish_exam_session');
+        } catch (_error) {
+          // no-op; native layer handles guard logic
+        }
+      }
+
+      function renderTimer() {
+        if (!Number.isFinite(state.deadlineMs)) {
+          timerEl.textContent = '--:--';
+          return;
+        }
+
+        const diff = Math.max(0, Math.floor((state.deadlineMs - Date.now()) / 1000));
+        const mm = String(Math.floor(diff / 60)).padStart(2, '0');
+        const ss = String(diff % 60).padStart(2, '0');
+        timerEl.textContent = `${mm}:${ss}`;
+
+        if (diff <= 0) {
+          endSession();
+        }
+      }
+
+      async function boot() {
+        if (!invoke) {
+          nameEl.textContent = 'Mode Ujian';
+          return;
+        }
+
+        try {
+          const cfg = await invoke('get_exam_overlay_state');
+          nameEl.textContent = cfg?.displayName?.trim() || '-';
+
+          state.deadlineMs = cfg?.deadlineAt ? Date.parse(cfg.deadlineAt) : NaN;
+          renderTimer();
+          window.setInterval(renderTimer, 1000);
+        } catch (_error) {
+          nameEl.textContent = 'Mode Ujian';
+          timerEl.textContent = '--:--';
+        }
+      }
+
+      endButton.addEventListener('click', async () => {
+        const ok = window.confirm('Akhiri sesi ujian sekarang?');
+        if (!ok) {
+          return;
+        }
+
+        await endSession();
+      });
+
+      boot();
+    </script>
+  </body>
+</html>

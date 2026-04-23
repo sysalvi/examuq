@@ -144,6 +144,16 @@ class ExampleTest extends TestCase
 
         $target = $gatewayResponse->headers->get('Location', '');
         $this->assertStringContainsString('http://10.10.20.2:6997/?foo=bar&source=client&client_type=desktop_client&device_id=device-123', $target);
+
+        $query = parse_url($target, PHP_URL_QUERY);
+        $this->assertIsString($query);
+
+        parse_str($query, $overlay);
+        $this->assertSame('Dokun', $overlay['examuq_display_name'] ?? null);
+        $this->assertSame('https://return.examuq.invalid/launcher', $overlay['examuq_return_url'] ?? null);
+        $this->assertNotEmpty($overlay['examuq_session_id'] ?? '');
+        $this->assertNotEmpty($overlay['examuq_deadline_at'] ?? '');
+        $this->assertSame('http://localhost', $overlay['examuq_api_base'] ?? null);
     }
 
     public function test_exam_gateway_redirects_directly_for_extension_client(): void
@@ -182,5 +192,15 @@ class ExampleTest extends TestCase
 
         $target = $gatewayResponse->headers->get('Location', '');
         $this->assertStringContainsString('http://10.10.20.2:6997/?source=extension&client_type=chrome_extension&device_id=ext-1', $target);
+
+        $query = parse_url($target, PHP_URL_QUERY);
+        $this->assertIsString($query);
+
+        parse_str($query, $overlay);
+        $this->assertSame('Dokun', $overlay['examuq_display_name'] ?? null);
+        $this->assertSame('https://return.examuq.invalid/launcher', $overlay['examuq_return_url'] ?? null);
+        $this->assertNotEmpty($overlay['examuq_session_id'] ?? '');
+        $this->assertNotEmpty($overlay['examuq_deadline_at'] ?? '');
+        $this->assertSame('http://localhost', $overlay['examuq_api_base'] ?? null);
     }
 }

@@ -11,7 +11,10 @@ use std::{
 };
 #[cfg(target_os = "macos")]
 use tauri::ActivationPolicy;
-use tauri::{AppHandle, Manager, RunEvent, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use tauri::{
+    AppHandle, Manager, PhysicalPosition, PhysicalSize, Position, RunEvent, Size, State,
+    WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
 use tauri_plugin_updater::UpdaterExt;
@@ -23,6 +26,7 @@ const LEGACY_SERVER_HOSTS: [&str; 1] = ["kreasai.com"];
 const STATE_FILE_NAME: &str = "client-state.json";
 const LAUNCHER_WINDOW_LABEL: &str = "main";
 const EXAM_WINDOW_LABEL: &str = "exam";
+const OVERLAY_WINDOW_LABEL: &str = "exam-overlay";
 const RETURN_TO_LAUNCHER_HOST: &str = "return.examuq.invalid";
 const RETURN_TO_LAUNCHER_PATH: &str = "/launcher";
 const END_SESSION_EVAL_DELAY_MS: u64 = 260;
@@ -64,6 +68,17 @@ struct StartExamResponse {
 struct RuntimeState {
     client_state: Mutex<ClientState>,
     allow_exam_close: Mutex<bool>,
+    overlay_state: Mutex<Option<ExamOverlayState>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExamOverlayState {
+    session_id: String,
+    display_name: String,
+    deadline_at: String,
+    return_url: String,
+    api_base: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -329,9 +344,6 @@ fn ensure_exam_window_kiosk(window: &WebviewWindow) {
     if matches!(window.is_minimized(), Ok(true)) {
         let _ = window.unminimize();
     }
-    if !matches!(window.is_fullscreen(), Ok(true)) {
-        let _ = window.set_fullscreen(true);
-    }
     let _ = window.set_content_protected(false);
     let _ = window.set_skip_taskbar(false);
     let _ = window.set_always_on_top(true);
@@ -385,6 +397,70 @@ fn build_exam_launch_url(server_base_url: &str, device_id: &str) -> Result<Url, 
     Ok(launch_url)
 }
 
+fn parse_overlay_state_from_url(url: &Url) -> Option<ExamOverlayState> {
+    let mut session_id = String::new();
+    let mut display_name = String::new();
+    let mut deadline_at = String::new();
+    let mut return_url = String::new();
+    let mut api_base = String::new();
+
+    let mut apply_pair = |key: &str, value: String| match key {
+        "examuq_session_id" => session_id = value,
+        "examuq_display_name" => display_name = value,
+        "examuq_deadline_at" => deadline_at = value,
+        "examuq_return_url" => return_url = value,
+        "examuq_api_base" => api_base = value,
+        _ => {}
+    };
+
+    if let Some(query) = url.query() {
+        for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
+            apply_pair(key.as_ref(), value.into_owned());
+        }
+    }
+
+    if let Some(fragment) = url.fragment() {
+        for (key, value) in url::form_urlencoded::parse(fragment.as_bytes()) {
+            apply_pair(key.as_ref(), value.into_owned());
+        }
+    }
+
+    if session_id.trim().is_empty() || return_url.trim().is_empty() {
+        return None;
+    }
+
+    Some(ExamOverlayState {
+        session_id,
+        display_name,
+        deadline_at,
+        return_url,
+        api_base,
+    })
+}
+
+fn sync_overlay_window(exam_window: &WebviewWindow, overlay_window: &WebviewWindow) {
+    if let Ok(pos) = exam_window.outer_position() {
+        let _ = overlay_window.set_position(Position::Physical(PhysicalPosition::new(pos.x, pos.y)));
+    }
+
+    if let Ok(size) = exam_window.outer_size() {
+        let width = if size.width < 480 { 480 } else { size.width };
+        let _ = overlay_window.set_size(Size::Physical(PhysicalSize::new(width, 58)));
+    }
+
+    let _ = overlay_window.set_always_on_top(true);
+    let _ = overlay_window.set_visible_on_all_workspaces(true);
+    let _ = overlay_window.show();
+}
+
+#[tauri::command]
+fn get_exam_overlay_state(state: State<'_, RuntimeState>) -> Result<ExamOverlayState, String> {
+    let guard = state.overlay_state.lock().map_err(|_| "State lock error")?;
+    guard
+        .clone()
+        .ok_or_else(|| "Overlay state belum tersedia.".to_string())
+}
+
 fn open_exam_window(app: &AppHandle, state: &RuntimeState, launch_url: Url) -> Result<(), String> {
     {
         let mut allow_close = state
@@ -397,6 +473,11 @@ fn open_exam_window(app: &AppHandle, state: &RuntimeState, launch_url: Url) -> R
     let launcher = launcher_window(app)?;
     let _ = launcher.hide();
 
+    {
+        let mut overlay = state.overlay_state.lock().map_err(|_| "State lock error")?;
+        *overlay = parse_overlay_state_from_url(&launch_url);
+    }
+
     let exam_window = if let Some(existing) = app.get_webview_window(EXAM_WINDOW_LABEL) {
         let _ = existing.navigate(launch_url.clone());
         existing
@@ -406,11 +487,19 @@ fn open_exam_window(app: &AppHandle, state: &RuntimeState, launch_url: Url) -> R
         WebviewWindowBuilder::new(app, EXAM_WINDOW_LABEL, WebviewUrl::External(launch_url.clone()))
             .title("ExamUQ Client - Ujian")
             .resizable(false)
-            .fullscreen(true)
+            .fullscreen(false)
             .decorations(false)
             .focused(true)
             .visible(true)
             .on_navigation(move |url| {
+                if let Some(state) = app_handle.try_state::<RuntimeState>() {
+                    if let Some(overlay) = parse_overlay_state_from_url(url) {
+                        if let Ok(mut guard) = state.overlay_state.lock() {
+                            *guard = Some(overlay);
+                        }
+                    }
+                }
+
                 if !is_return_to_launcher_url(url) {
                     return true;
                 }
@@ -428,6 +517,23 @@ fn open_exam_window(app: &AppHandle, state: &RuntimeState, launch_url: Url) -> R
             .build()
             .map_err(|e| format!("Gagal membuka jendela ujian: {e}"))?
     };
+
+    let overlay_window = if let Some(existing) = app.get_webview_window(OVERLAY_WINDOW_LABEL) {
+        existing
+    } else {
+        WebviewWindowBuilder::new(app, OVERLAY_WINDOW_LABEL, WebviewUrl::App("exam-overlay.html".into()))
+            .title("ExamUQ Overlay")
+            .decorations(false)
+            .resizable(false)
+            .focused(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .visible(true)
+            .build()
+            .map_err(|e| format!("Gagal membuka overlay ujian: {e}"))?
+    };
+
+    sync_overlay_window(&exam_window, &overlay_window);
 
     activate_exam_kiosk(&exam_window);
 
@@ -463,8 +569,17 @@ fn return_to_launcher_runtime(
         *allow_close = true;
     }
 
+    {
+        let mut overlay = state.overlay_state.lock().map_err(|_| "State lock error")?;
+        *overlay = None;
+    }
+
     if let Some(exam_window) = app.get_webview_window(EXAM_WINDOW_LABEL) {
         let _ = exam_window.close();
+    }
+
+    if let Some(overlay_window) = app.get_webview_window(OVERLAY_WINDOW_LABEL) {
+        let _ = overlay_window.close();
     }
 
     restore_launcher_window(&launcher);
@@ -914,6 +1029,7 @@ pub fn run() {
             app.manage(RuntimeState {
                 client_state: Mutex::new(loaded),
                 allow_exam_close: Mutex::new(true),
+                overlay_state: Mutex::new(None),
             });
 
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -959,12 +1075,28 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if window.label() != EXAM_WINDOW_LABEL {
+            if window.label() != EXAM_WINDOW_LABEL && window.label() != OVERLAY_WINDOW_LABEL {
                 return;
             }
 
-            let should_reenforce_on_resize = matches!(event, WindowEvent::Resized(_));
-            if should_reenforce_on_resize {
+            if window.label() == OVERLAY_WINDOW_LABEL {
+                if let Some(state) = window.try_state::<RuntimeState>() {
+                    if exam_kiosk_is_active(&window.app_handle(), &state) {
+                        if let Some(overlay_window) = window.app_handle().get_webview_window(OVERLAY_WINDOW_LABEL) {
+                            let _ = overlay_window.show();
+                        }
+                    }
+                }
+
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                }
+
+                return;
+            }
+
+            let should_sync_overlay = matches!(event, WindowEvent::Resized(_) | WindowEvent::Moved(_));
+            if should_sync_overlay {
                 if let Some(state) = window.try_state::<RuntimeState>() {
                     if exam_kiosk_is_active(&window.app_handle(), &state) {
                         if let Some(exam_window) =
@@ -972,6 +1104,11 @@ pub fn run() {
                         {
                             ensure_exam_window_kiosk(&exam_window);
                             apply_macos_exam_presentation_lock(&window.app_handle(), true);
+                            if let Some(overlay_window) =
+                                window.app_handle().get_webview_window(OVERLAY_WINDOW_LABEL)
+                            {
+                                sync_overlay_window(&exam_window, &overlay_window);
+                            }
                         }
                     }
                 }
@@ -990,6 +1127,14 @@ pub fn run() {
             if let WindowEvent::Focused(false) = event {
                 if let Some(state) = window.try_state::<RuntimeState>() {
                     if exam_kiosk_is_active(&window.app_handle(), &state) {
+                        if let Some(overlay_window) =
+                            window.app_handle().get_webview_window(OVERLAY_WINDOW_LABEL)
+                        {
+                            if matches!(overlay_window.is_focused(), Ok(true)) {
+                                return;
+                            }
+                        }
+
                         if let Some(exam_window) =
                             window.app_handle().get_webview_window(EXAM_WINDOW_LABEL)
                         {
@@ -997,6 +1142,11 @@ pub fn run() {
                             apply_macos_exam_presentation_lock(&window.app_handle(), true);
                             #[cfg(not(any(target_os = "android", target_os = "ios")))]
                             let _ = exam_window.set_focus();
+                            if let Some(overlay_window) =
+                                window.app_handle().get_webview_window(OVERLAY_WINDOW_LABEL)
+                            {
+                                sync_overlay_window(&exam_window, &overlay_window);
+                            }
                         }
                     }
                 }
@@ -1009,6 +1159,7 @@ pub fn run() {
             start_exam,
             open_exam_direct,
             finish_exam_session,
+            get_exam_overlay_state,
             execute_secret_exit,
             get_updater_channel_info,
             check_for_updates,
