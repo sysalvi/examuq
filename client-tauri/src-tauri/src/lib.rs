@@ -466,11 +466,32 @@ fn request_launch_from_backend(
 
     if !response.status().is_success() {
         let status = response.status();
-        let message = response
-            .json::<serde_json::Value>()
+        let body_text = response.text().unwrap_or_default();
+        let body_message = serde_json::from_str::<serde_json::Value>(&body_text)
             .ok()
-            .and_then(|body| body.get("message").and_then(|m| m.as_str()).map(|m| m.to_string()))
-            .unwrap_or_else(|| format!("Launch ditolak server (status {status})"));
+            .and_then(|body| body.get("message").and_then(|m| m.as_str()).map(|m| m.to_string()));
+
+        let message = match status.as_u16() {
+            403 | 404 | 405 => format!(
+                "Backend belum mendukung form client ExamUQ (status {}). Update backend terbaru lalu jalankan php artisan optimize:clear, route:clear, config:clear.",
+                status
+            ),
+            422 => body_message.unwrap_or_else(|| {
+                "Token tidak valid atau ujian tidak aktif di backend.".to_string()
+            }),
+            500..=599 => format!(
+                "Backend error (status {}). Cek log server dan pastikan route launch request aktif.",
+                status
+            ),
+            _ => body_message.unwrap_or_else(|| {
+                if body_text.trim().is_empty() {
+                    format!("Launch ditolak server (status {status})")
+                } else {
+                    format!("Launch ditolak server (status {}): {}", status, body_text.trim())
+                }
+            }),
+        };
+
         return Err(message);
     }
 
