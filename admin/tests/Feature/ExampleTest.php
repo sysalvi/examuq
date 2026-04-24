@@ -203,4 +203,137 @@ class ExampleTest extends TestCase
         $this->assertNotEmpty($overlay['examuq_deadline_at'] ?? '');
         $this->assertSame('http://localhost', $overlay['examuq_api_base'] ?? null);
     }
+
+    public function test_session_heartbeat_endpoint_does_not_reactivate_finished_session(): void
+    {
+        $user = User::factory()->create();
+
+        $exam = Exam::query()->create([
+            'title' => 'Ujian Heartbeat API',
+            'subject' => 'Teknologi',
+            'class_room' => '12-A',
+            'exam_url' => 'https://example.com/exam',
+            'duration_minutes' => 90,
+            'is_active' => true,
+            'created_by' => $user->id,
+        ]);
+
+        $session = ExamSession::query()->create([
+            'exam_id' => $exam->id,
+            'display_name' => 'Dokun',
+            'class_room' => '12-A',
+            'client_type' => 'desktop_client',
+            'device_id' => 'desktop-1',
+            'status' => 'finished',
+            'started_at' => now()->subMinutes(30),
+            'last_heartbeat_at' => now()->subMinutes(10),
+            'ended_at' => now()->subMinutes(2),
+        ]);
+
+        $this->postJson('/api/v1/sessions/'.$session->id.'/heartbeat')
+            ->assertNoContent();
+
+        $session->refresh();
+
+        $this->assertSame('finished', $session->status);
+        $this->assertNotNull($session->last_heartbeat_at);
+        $this->assertTrue($session->last_heartbeat_at->lessThan(now()->subMinutes(5)));
+    }
+
+    public function test_session_end_endpoint_marks_session_finished(): void
+    {
+        $user = User::factory()->create();
+
+        $exam = Exam::query()->create([
+            'title' => 'Ujian End API',
+            'subject' => 'Teknologi',
+            'class_room' => '12-A',
+            'exam_url' => 'https://example.com/exam',
+            'duration_minutes' => 90,
+            'is_active' => true,
+            'created_by' => $user->id,
+        ]);
+
+        $session = ExamSession::query()->create([
+            'exam_id' => $exam->id,
+            'display_name' => 'Dokun',
+            'class_room' => '12-A',
+            'client_type' => 'desktop_client',
+            'device_id' => 'desktop-1',
+            'status' => 'active',
+            'started_at' => now()->subMinutes(15),
+            'last_heartbeat_at' => now()->subSeconds(30),
+        ]);
+
+        $this->postJson('/api/v1/sessions/'.$session->id.'/end', [
+            'reason' => 'desktop_finish_button',
+        ])->assertOk()
+            ->assertJson([
+                'message' => 'Sesi ditutup.',
+                'session_id' => $session->id,
+            ]);
+
+        $session->refresh();
+
+        $this->assertSame('finished', $session->status);
+        $this->assertNotNull($session->ended_at);
+        $this->assertTrue($session->ended_at->greaterThan(now()->subMinute()));
+    }
+
+    public function test_launch_request_requires_examuq_client_identity(): void
+    {
+        $this->postJson('/api/v1/launch/request', [
+            'display_name' => 'Dokun',
+            'class_room' => '12-A',
+            'token_global' => 'ANY',
+            'client_type' => 'desktop_client',
+            'device_id' => 'desktop-1',
+        ])->assertStatus(403);
+    }
+
+    public function test_launch_request_supports_token_only_client_first_flow(): void
+    {
+        $user = User::factory()->create();
+
+        $exam = Exam::query()->create([
+            'title' => 'Ujian Client First Token',
+            'subject' => 'Teknologi',
+            'class_room' => '12-A',
+            'exam_url' => 'https://example.com/exam',
+            'duration_minutes' => 90,
+            'is_active' => true,
+            'created_by' => $user->id,
+        ]);
+
+        $response = $this->withHeaders([
+            'X-ExamUQ-Client-Type' => 'desktop_client',
+            'X-ExamUQ-Source' => 'client',
+            'X-ExamUQ-Device-Id' => 'desktop-client-first',
+        ])->postJson('/api/v1/launch/request', [
+            'display_name' => 'Dokun',
+            'class_room' => '12-A',
+            'token_global' => $exam->token_global,
+            'client_type' => 'desktop_client',
+            'device_id' => 'desktop-client-first',
+        ]);
+
+        $response->assertOk()->assertJsonStructure([
+            'message',
+            'session_id',
+            'launch_token',
+            'expires_at',
+            'redirect_url',
+        ]);
+
+        $session = ExamSession::query()->findOrFail((int) $response->json('session_id'));
+        $this->assertSame($exam->id, $session->exam_id);
+        $this->assertSame('Dokun', $session->display_name);
+        $this->assertSame('12-A', $session->class_room);
+        $this->assertSame('desktop_client', $session->client_type);
+        $this->assertSame('desktop-client-first', $session->device_id);
+
+        $redirectUrl = (string) $response->json('redirect_url');
+        $this->assertStringContainsString('/exam-gateway?lt=', $redirectUrl);
+    }
+
 }

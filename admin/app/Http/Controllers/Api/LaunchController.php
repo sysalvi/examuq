@@ -16,7 +16,7 @@ class LaunchController extends Controller
     public function requestLaunch(Request $request): JsonResponse
     {
         $payload = $request->validate([
-            'exam_id' => ['required', 'integer', 'exists:exams,id'],
+            'exam_id' => ['nullable', 'integer', 'exists:exams,id'],
             'display_name' => ['required', 'string', 'max:255'],
             'class_room' => ['required', 'string', 'max:255'],
             'token_global' => ['required', 'string', 'max:255'],
@@ -24,12 +24,34 @@ class LaunchController extends Controller
             'device_id' => ['nullable', 'string', 'max:255'],
         ]);
 
-        $exam = Exam::query()->findOrFail($payload['exam_id']);
+        $exam = null;
+        if (isset($payload['exam_id']) && $payload['exam_id']) {
+            $exam = Exam::query()->findOrFail((int) $payload['exam_id']);
+        } else {
+            $exam = Exam::query()
+                ->where('token_global', $payload['token_global'])
+                ->where('is_active', true)
+                ->orderByDesc('id')
+                ->first();
+        }
+
+        if (! $exam) {
+            return response()->json([
+                'message' => 'Token tidak valid atau ujian tidak aktif.',
+            ], 422);
+        }
 
         if (! $exam->is_active || $exam->token_global !== $payload['token_global']) {
             return response()->json([
                 'message' => 'Token tidak valid atau ujian tidak aktif.',
             ], 422);
+        }
+
+        $resolvedClientType = (string) ($request->attributes->get('examuqClientType') ?: $payload['client_type']);
+        $resolvedDeviceId = $request->attributes->get('examuqDeviceId') ?: ($payload['device_id'] ?? null);
+
+        if (! in_array($resolvedClientType, ['desktop_client', 'chrome_extension'], true)) {
+            $resolvedClientType = $payload['client_type'];
         }
 
         $now = Carbon::now();
@@ -38,8 +60,8 @@ class LaunchController extends Controller
             'exam_id' => $exam->id,
             'display_name' => $payload['display_name'],
             'class_room' => $payload['class_room'],
-            'client_type' => $payload['client_type'],
-            'device_id' => $payload['device_id'] ?? null,
+            'client_type' => $resolvedClientType,
+            'device_id' => is_string($resolvedDeviceId) && $resolvedDeviceId !== '' ? $resolvedDeviceId : null,
             'status' => 'active',
             'started_at' => $now,
             'last_heartbeat_at' => $now,
@@ -54,7 +76,7 @@ class LaunchController extends Controller
             'exam_id' => $exam->id,
             'exam_session_id' => $session->id,
             'token_hash' => hash('sha256', $rawToken),
-            'issued_for_client' => $payload['client_type'],
+            'issued_for_client' => $resolvedClientType,
             'issued_for_ip' => $request->ip(),
             'payload_json' => [
                 'display_name' => $payload['display_name'],

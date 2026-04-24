@@ -56,6 +56,10 @@ class SessionController extends Controller
             ->select(['id', 'status', 'last_heartbeat_at'])
             ->findOrFail($sessionId);
 
+        if ($session->status === 'finished') {
+            return response()->json(null, 204);
+        }
+
         $now = Carbon::now();
         $lastHeartbeatAt = $session->last_heartbeat_at;
 
