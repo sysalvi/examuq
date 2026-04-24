@@ -40,9 +40,51 @@
     </main>
 
     <section id="examShell" class="exam-shell" aria-hidden="true">
-      <div id="examLoading" class="exam-loading" aria-live="polite">Memuat portal ujian...</div>
-      <button id="openFinishOverlayButton" type="button" class="exam-finish-trigger">Selesai Ujian</button>
-      <iframe id="examFrame" class="exam-frame" title="Portal Ujian"></iframe>
+      <header class="exam-topbar">
+        <div class="exam-topbar__meta">
+          <span class="badge">Mode Ujian</span>
+          <div class="exam-stat">
+            <span class="exam-stat__label">Nama</span>
+            <strong id="examDisplayName">Peserta</strong>
+          </div>
+          <div class="exam-stat">
+            <span class="exam-stat__label">Waktu</span>
+            <strong id="examTimer">--:--:--</strong>
+          </div>
+          <div class="exam-stat exam-stat--status">
+            <span class="exam-stat__label">Status</span>
+            <strong id="examLoading">Menyiapkan portal ujian...</strong>
+          </div>
+        </div>
+        <button id="openFinishOverlayButton" type="button" class="exam-finish-trigger">Akhiri Sesi</button>
+      </header>
+      <div id="examViewport" class="exam-viewport" aria-hidden="true">
+        <div id="examLaunchForm" class="exam-launch-form hidden" aria-hidden="true">
+          <div class="exam-launch-form__card">
+            <h3>Data Peserta</h3>
+            <p>Isi data peserta dan token ujian untuk melanjutkan.</p>
+
+            <div class="form" novalidate>
+              <label class="label" for="participantName">Nama Peserta</label>
+              <input id="participantName" type="text" placeholder="Masukkan nama lengkap" autocomplete="off" />
+
+              <label class="label" for="participantClass">Kelas</label>
+              <input id="participantClass" type="text" placeholder="Contoh: 12-A" autocomplete="off" />
+
+              <label class="label" for="participantToken">Token Ujian</label>
+              <input id="participantToken" type="text" placeholder="Masukkan token" autocomplete="off" />
+
+              <div class="actions exam-launch-form__actions">
+                <button id="submitParticipantButton" type="button" class="btn primary">Lanjutkan ke Ujian</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="examViewportPlaceholder" class="exam-viewport__placeholder">
+          Portal ujian akan tampil di area ini setelah mode ujian aktif.
+        </div>
+      </div>
 
       <div id="finishOverlay" class="finish-overlay" aria-hidden="true">
         <div class="finish-card" role="dialog" aria-modal="true" aria-labelledby="finishTitle">

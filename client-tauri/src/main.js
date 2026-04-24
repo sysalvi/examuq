@@ -17,7 +17,15 @@ const settingsPasswordInput = document.getElementById('settingsPassword');
 const unlockSettingsButton = document.getElementById('unlockSettingsButton');
 const launcherShell = document.getElementById('launcherShell');
 const examShell = document.getElementById('examShell');
-const examFrame = document.getElementById('examFrame');
+const examDisplayName = document.getElementById('examDisplayName');
+const examTimer = document.getElementById('examTimer');
+const examViewport = document.getElementById('examViewport');
+const examLaunchForm = document.getElementById('examLaunchForm');
+const examViewportPlaceholder = document.getElementById('examViewportPlaceholder');
+const participantNameInput = document.getElementById('participantName');
+const participantClassInput = document.getElementById('participantClass');
+const participantTokenInput = document.getElementById('participantToken');
+const submitParticipantButton = document.getElementById('submitParticipantButton');
 const examLoading = document.getElementById('examLoading');
 const finishOverlay = document.getElementById('finishOverlay');
 const openFinishOverlayButton = document.getElementById('openFinishOverlayButton');
@@ -25,12 +33,20 @@ const cancelFinishButton = document.getElementById('cancelFinishButton');
 const confirmFinishButton = document.getElementById('confirmFinishButton');
 const appVersionElement = document.getElementById('appVersion');
 
-let frameLoadTimeout;
 let startExamInFlight = false;
-let frameLoaded = false;
 let settingsUnlocked = false;
 let currentDeviceId = '';
-const FRAME_LOAD_TIMEOUT_MS = 10000;
+let examModeActive = false;
+let examState = {
+  sessionId: '',
+  displayName: 'Peserta',
+  deadlineAt: '',
+  returnUrl: '',
+  apiBase: '',
+};
+let examPollingTimer;
+let examClockTimer;
+let launchExamInFlight = false;
 
 function isBlockedFunctionKey(key) {
   return /^F([1-9]|1[0-2])$/.test(key);
@@ -43,10 +59,6 @@ function isBlockedRefreshShortcut(event) {
 
 function shouldBlockHotkey(event) {
   return isBlockedFunctionKey(event.key) || isBlockedRefreshShortcut(event);
-}
-
-function clearFrameTimers() {
-  clearTimeout(frameLoadTimeout);
 }
 
 function setFeedback(message, isError = false) {
@@ -91,16 +103,43 @@ function unlockSettings() {
 }
 
 function setExamMode(active) {
+  examModeActive = active;
   launcherShell.classList.toggle('hidden', active);
   examShell.classList.toggle('show', active);
   examShell.setAttribute('aria-hidden', active ? 'false' : 'true');
+  examViewport?.setAttribute('aria-hidden', active ? 'false' : 'true');
 
   if (!active) {
     setFinishOverlayVisible(false);
+    stopExamStateSync();
+    renderExamState();
+    setExamLaunchFormVisible(false);
+    clearParticipantForm();
   }
 
   if (active) {
     setSettingsOverlayVisible(false);
+    startExamStateSync();
+  }
+}
+
+function setExamLaunchFormVisible(visible) {
+  if (!examLaunchForm) {
+    return;
+  }
+
+  examLaunchForm.classList.toggle('show', visible);
+  examLaunchForm.classList.toggle('hidden', !visible);
+  examLaunchForm.setAttribute('aria-hidden', visible ? 'false' : 'true');
+
+  if (examViewportPlaceholder) {
+    examViewportPlaceholder.classList.toggle('hidden', visible);
+  }
+}
+
+function clearParticipantForm() {
+  if (participantTokenInput) {
+    participantTokenInput.value = '';
   }
 }
 
@@ -109,54 +148,17 @@ function setFinishOverlayVisible(visible) {
   finishOverlay.setAttribute('aria-hidden', visible ? 'false' : 'true');
 }
 
-function buildLaunchUrl(serverBaseUrl) {
-  try {
-    const launchUrl = new URL('/', serverBaseUrl);
-    launchUrl.searchParams.set('source', 'client');
-    launchUrl.searchParams.set('client_type', 'desktop_client');
-    if (currentDeviceId) {
-      launchUrl.searchParams.set('device_id', currentDeviceId);
-    }
-    return launchUrl.toString();
-  } catch {
-    const fallback = new URL(`${serverBaseUrl.replace(/\/+$/, '')}/`);
-    fallback.searchParams.set('source', 'client');
-    fallback.searchParams.set('client_type', 'desktop_client');
-    if (currentDeviceId) {
-      fallback.searchParams.set('device_id', currentDeviceId);
-    }
-    return fallback.toString();
-  }
-}
-
-function beginExamFrameLoading() {
-  clearFrameTimers();
-  frameLoaded = false;
-  examLoading.textContent = 'Memuat portal ujian...';
-  examLoading.classList.add('show');
-
-  frameLoadTimeout = setTimeout(() => {
-    examLoading.textContent = 'Portal belum merespons. Periksa URL server.';
-    examLoading.classList.add('show');
-  }, FRAME_LOAD_TIMEOUT_MS);
-}
-
-function finishExamFrameLoading(success) {
-  clearFrameTimers();
-
-  if (success) {
-    examLoading.classList.remove('show');
-    return;
-  }
-
-  examLoading.textContent = 'Gagal memuat portal ujian.';
-  examLoading.classList.add('show');
-}
-
 function returnToLauncherUi(message = '') {
-  examFrame.src = 'about:blank';
+  examState = {
+    sessionId: '',
+    displayName: 'Peserta',
+    deadlineAt: '',
+    returnUrl: '',
+    apiBase: '',
+  };
   setExamMode(false);
   setFinishOverlayVisible(false);
+  setExamLoadingState(false, 'Menunggu mode ujian aktif...');
   setFeedback(message, false);
 }
 
@@ -164,7 +166,7 @@ async function finishExamSession() {
   confirmFinishButton.disabled = true;
   cancelFinishButton.disabled = true;
   openFinishOverlayButton.disabled = true;
-
+  setExamLoadingState(true, 'Mengakhiri sesi ujian...');
   returnToLauncherUi('Mengakhiri sesi dan kembali ke halaman awal...');
 
   void invoke('finish_exam_session')
@@ -179,6 +181,159 @@ async function finishExamSession() {
       setFinishOverlayVisible(false);
     });
 }
+
+async function submitParticipantData() {
+  if (launchExamInFlight) {
+    return;
+  }
+
+  const displayName = participantNameInput?.value?.trim() || '';
+  const classRoom = participantClassInput?.value?.trim() || '';
+  const tokenGlobal = participantTokenInput?.value?.trim() || '';
+
+  if (!displayName) {
+    setFeedback('Nama peserta wajib diisi.', true);
+    participantNameInput?.focus();
+    return;
+  }
+
+  if (!classRoom) {
+    setFeedback('Kelas wajib diisi.', true);
+    participantClassInput?.focus();
+    return;
+  }
+
+  if (!tokenGlobal) {
+    setFeedback('Token ujian wajib diisi.', true);
+    participantTokenInput?.focus();
+    return;
+  }
+
+  launchExamInFlight = true;
+  if (submitParticipantButton) {
+    submitParticipantButton.disabled = true;
+  }
+
+  setExamLoadingState(true, 'Memvalidasi data peserta dan token...');
+
+  try {
+    const result = await invoke('launch_exam_from_client', {
+      payload: {
+        displayName,
+        classRoom,
+        tokenGlobal,
+      },
+    });
+
+    if (!result?.ok) {
+      setFeedback('Gagal membuka ujian.', true);
+      setExamLoadingState(false, 'Isi data peserta untuk memulai ujian.');
+      return;
+    }
+
+    setExamLaunchFormVisible(false);
+    setExamLoadingState(true, 'Memuat portal ujian...');
+    setFeedback('Data peserta diterima. Mengarahkan ke ujian...');
+  } catch (error) {
+    setFeedback(`Gagal validasi peserta/token: ${String(error)}`, true);
+    setExamLoadingState(false, 'Isi data peserta untuk memulai ujian.');
+  } finally {
+    launchExamInFlight = false;
+    if (submitParticipantButton) {
+      submitParticipantButton.disabled = false;
+    }
+  }
+}
+
+function formatDuration(totalSeconds) {
+  const safe = Math.max(0, totalSeconds);
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  const seconds = safe % 60;
+  return [hours, minutes, seconds].map((value) => String(value).padStart(2, '0')).join(':');
+}
+
+function renderExamState() {
+  examDisplayName.textContent = examState.displayName?.trim() || 'Peserta';
+
+  if (!examModeActive) {
+    examTimer.textContent = '--:--:--';
+    return;
+  }
+
+  if (!examState.deadlineAt) {
+    examTimer.textContent = 'Menunggu data';
+    return;
+  }
+
+  const deadline = new Date(examState.deadlineAt);
+  if (Number.isNaN(deadline.getTime())) {
+    examTimer.textContent = 'Format waktu invalid';
+    return;
+  }
+
+  const diffInSeconds = Math.max(0, Math.floor((deadline.getTime() - Date.now()) / 1000));
+  examTimer.textContent = formatDuration(diffInSeconds);
+}
+
+function setExamLoadingState(active, message = '') {
+  examLoading.textContent = message || (active ? 'Memuat portal ujian...' : 'Portal ujian siap.');
+  examLoading.dataset.state = active ? 'loading' : 'ready';
+}
+
+function applyExamState(nextState = {}) {
+  examState = {
+    ...examState,
+    ...nextState,
+  };
+  renderExamState();
+}
+
+async function syncExamStateFromNative() {
+  if (!examModeActive) {
+    return;
+  }
+
+  try {
+    const state = await invoke('get_exam_overlay_state');
+    if (state) {
+      applyExamState(state);
+    }
+  } catch (error) {
+    console.warn('Gagal sinkronisasi state ujian:', error);
+  }
+}
+
+function stopExamStateSync() {
+  clearInterval(examPollingTimer);
+  clearInterval(examClockTimer);
+  examPollingTimer = undefined;
+  examClockTimer = undefined;
+}
+
+function startExamStateSync() {
+  stopExamStateSync();
+  renderExamState();
+  void syncExamStateFromNative();
+  examPollingTimer = window.setInterval(() => {
+    void syncExamStateFromNative();
+  }, 5000);
+  examClockTimer = window.setInterval(() => {
+    renderExamState();
+  }, 1000);
+}
+
+window.__EXAMUQ_ENTER_EXAM_MODE__ = () => {
+  setExamMode(true);
+};
+
+window.__EXAMUQ_SET_EXAM_LOADING__ = (active = false, message = '') => {
+  setExamLoadingState(Boolean(active), String(message || ''));
+};
+
+window.__EXAMUQ_SYNC_EXAM_STATE__ = (state = {}) => {
+  applyExamState(state);
+};
 
 window.__EXAMUQ_RETURN_TO_LAUNCHER__ = (message = 'Mode ujian dihentikan dan kembali ke halaman awal.') => {
   returnToLauncherUi(message);
@@ -243,17 +398,25 @@ async function startExam() {
 
   startExamInFlight = true;
   startExamButton.disabled = true;
-  setFeedback('Membuka portal siswa...');
+  setFeedback('Masuk mode ujian...');
+  setExamMode(true);
+  setExamLaunchFormVisible(true);
+  setExamLoadingState(false, 'Isi data peserta untuk memulai ujian.');
 
   try {
     const result = await invoke('start_exam');
     if (!result?.ok) {
-      setFeedback('Gagal membuka portal siswa.', true);
+      returnToLauncherUi('Gagal masuk mode ujian.');
+      setFeedback('Gagal masuk mode ujian.', true);
       return;
     }
 
-    setFeedback('Portal siswa dibuka di jendela ujian.');
+    setExamLaunchFormVisible(true);
+    setExamLoadingState(false, 'Isi data peserta untuk memulai ujian.');
+    participantNameInput?.focus();
+    setFeedback('Mode ujian aktif. Isi data peserta dan token.');
   } catch (error) {
+    returnToLauncherUi(`Gagal membuka portal siswa: ${String(error)}`);
     setFeedback(`Gagal membuka portal siswa: ${String(error)}`, true);
   } finally {
     startExamInFlight = false;
@@ -313,7 +476,7 @@ settingsOverlay.addEventListener('click', (event) => {
   }
 });
 
-openFinishOverlayButton.addEventListener('click', () => setFinishOverlayVisible(true));
+openFinishOverlayButton.addEventListener('click', finishExamSession);
 cancelFinishButton.addEventListener('click', () => setFinishOverlayVisible(false));
 confirmFinishButton.addEventListener('click', finishExamSession);
 
@@ -321,6 +484,17 @@ finishOverlay.addEventListener('click', (event) => {
   if (event.target === finishOverlay) {
     setFinishOverlayVisible(false);
   }
+});
+
+submitParticipantButton?.addEventListener('click', submitParticipantData);
+
+participantTokenInput?.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') {
+    return;
+  }
+
+  event.preventDefault();
+  void submitParticipantData();
 });
 
 document.addEventListener(
@@ -346,15 +520,6 @@ document.addEventListener(
   },
   true,
 );
-
-examFrame.addEventListener('load', () => {
-  frameLoaded = true;
-  finishExamFrameLoading(true);
-});
-
-examFrame.addEventListener('error', () => {
-  finishExamFrameLoading(false);
-});
 
 hydrateState();
 maybeCheckForUpdates();
