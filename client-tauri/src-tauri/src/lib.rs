@@ -5,15 +5,19 @@ use std::{
     fs,
     io::Write,
     path::PathBuf,
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 #[cfg(target_os = "macos")]
 use tauri::ActivationPolicy;
 use tauri::{
-    AppHandle, Manager, PhysicalPosition, PhysicalSize, Position, RunEvent, Size, State,
-    WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+    webview::{NewWindowResponse, PageLoadEvent, WebviewBuilder}, AppHandle, Manager,
+    LogicalPosition, LogicalSize, PhysicalSize, Position, RunEvent, Size,
+    State, WebviewUrl, WebviewWindow, Window, WindowEvent,
 };
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
@@ -25,8 +29,10 @@ const LEGACY_SERVER_BASE_URL: &str = "http://10.10.20.2:6996";
 const LEGACY_SERVER_HOSTS: [&str; 1] = ["kreasai.com"];
 const STATE_FILE_NAME: &str = "client-state.json";
 const LAUNCHER_WINDOW_LABEL: &str = "main";
-const EXAM_WINDOW_LABEL: &str = "exam";
-const OVERLAY_WINDOW_LABEL: &str = "exam-overlay";
+const EXAM_WEBVIEW_LABEL: &str = "exam-content";
+const EXAM_TOP_BAR_HEIGHT: i32 = 92;
+const LAUNCHER_WINDOW_WIDTH: u32 = 460;
+const LAUNCHER_WINDOW_HEIGHT: u32 = 600;
 const RETURN_TO_LAUNCHER_HOST: &str = "return.examuq.invalid";
 const RETURN_TO_LAUNCHER_PATH: &str = "/launcher";
 const END_SESSION_EVAL_DELAY_MS: u64 = 260;
@@ -64,11 +70,28 @@ struct StartExamResponse {
     server_base_url: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct LaunchRequestResponse {
+    redirect_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StartExamPayload {
+    display_name: String,
+    class_room: String,
+    token_global: String,
+}
+
 #[derive(Debug)]
 struct RuntimeState {
     client_state: Mutex<ClientState>,
     allow_exam_close: Mutex<bool>,
     overlay_state: Mutex<Option<ExamOverlayState>>,
+    heartbeat_stop_signal: Mutex<Option<Arc<AtomicBool>>>,
+    heartbeat_session_key: Mutex<Option<String>>,
+    kiosk_watchdog_stop_signal: Mutex<Option<Arc<AtomicBool>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -344,8 +367,8 @@ fn ensure_exam_window_kiosk(window: &WebviewWindow) {
     if matches!(window.is_minimized(), Ok(true)) {
         let _ = window.unminimize();
     }
-    let _ = window.set_content_protected(false);
-    let _ = window.set_skip_taskbar(false);
+    let _ = window.set_content_protected(true);
+    let _ = window.set_skip_taskbar(true);
     let _ = window.set_always_on_top(true);
     let _ = window.show();
     let _ = window.set_focus();
@@ -363,12 +386,18 @@ fn exam_window_is_locked(state: &RuntimeState) -> bool {
 }
 
 fn exam_kiosk_is_active(app: &AppHandle, state: &RuntimeState) -> bool {
-    exam_window_is_locked(state) && app.get_webview_window(EXAM_WINDOW_LABEL).is_some()
+    let _ = app;
+    exam_window_is_locked(state)
 }
 
 fn launcher_window(app: &AppHandle) -> Result<WebviewWindow, String> {
     app.get_webview_window(LAUNCHER_WINDOW_LABEL)
         .ok_or_else(|| "Main window tidak ditemukan.".to_string())
+}
+
+fn launcher_host_window(app: &AppHandle) -> Result<Window, String> {
+    app.get_window(LAUNCHER_WINDOW_LABEL)
+        .ok_or_else(|| "Host window tidak ditemukan.".to_string())
 }
 
 fn is_return_to_launcher_url(url: &Url) -> bool {
@@ -385,8 +414,12 @@ fn return_message_from_url(url: &Url) -> String {
 }
 
 fn build_exam_launch_url(server_base_url: &str, device_id: &str) -> Result<Url, String> {
-    let mut launch_url = Url::parse(&format!("{}/", server_base_url.trim_end_matches('/')))
+    let mut launch_url = Url::parse(server_base_url)
         .map_err(|_| "URL server tidak valid.".to_string())?;
+
+    launch_url.set_path("/");
+    launch_url.set_query(None);
+    launch_url.set_fragment(None);
 
     launch_url
         .query_pairs_mut()
@@ -395,6 +428,99 @@ fn build_exam_launch_url(server_base_url: &str, device_id: &str) -> Result<Url, 
         .append_pair("device_id", device_id);
 
     Ok(launch_url)
+}
+
+fn build_launch_request_url(server_base_url: &str) -> Result<Url, String> {
+    Url::parse(&format!(
+        "{}/api/v1/launch/request",
+        server_base_url.trim_end_matches('/')
+    ))
+    .map_err(|_| "URL launch API tidak valid.".to_string())
+}
+
+fn request_launch_from_backend(
+    server_base_url: &str,
+    device_id: &str,
+    payload: &StartExamPayload,
+) -> Result<Url, String> {
+    let api_url = build_launch_request_url(server_base_url)?;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Gagal membuat HTTP client launch: {e}"))?;
+
+    let response = client
+        .post(api_url)
+        .header("X-ExamUQ-Client-Type", "desktop_client")
+        .header("X-ExamUQ-Source", "client")
+        .header("X-ExamUQ-Device-Id", device_id)
+        .json(&serde_json::json!({
+            "display_name": payload.display_name,
+            "class_room": payload.class_room,
+            "token_global": payload.token_global,
+            "client_type": "desktop_client",
+            "device_id": device_id,
+        }))
+        .send()
+        .map_err(|e| format!("Gagal mengirim data peserta/token: {e}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let message = response
+            .json::<serde_json::Value>()
+            .ok()
+            .and_then(|body| body.get("message").and_then(|m| m.as_str()).map(|m| m.to_string()))
+            .unwrap_or_else(|| format!("Launch ditolak server (status {status})"));
+        return Err(message);
+    }
+
+    let body: LaunchRequestResponse = response
+        .json()
+        .map_err(|e| format!("Respons launch tidak valid: {e}"))?;
+
+    Url::parse(&body.redirect_url).map_err(|_| "URL redirect ujian tidak valid dari backend.".to_string())
+}
+
+fn enter_exam_mode_runtime(app: &AppHandle, state: &RuntimeState) -> Result<(), String> {
+    if let Some(existing_webview) = app.get_webview(EXAM_WEBVIEW_LABEL) {
+        let _ = existing_webview.close();
+    }
+
+    stop_exam_session_heartbeat(state);
+
+    {
+        let mut allow_close = state
+            .allow_exam_close
+            .lock()
+            .map_err(|_| "State lock error")?;
+        *allow_close = false;
+    }
+
+    {
+        let mut overlay = state.overlay_state.lock().map_err(|_| "State lock error")?;
+        *overlay = Some(default_exam_overlay_state());
+    }
+
+    let launcher = launcher_window(app)?;
+    let _ = launcher.set_title("ExamUQ Client - Ujian");
+    let _ = launcher.show();
+    let _ = launcher.set_decorations(false);
+    let _ = launcher.set_resizable(false);
+    let _ = launcher.set_fullscreen(true);
+    let _ = launcher.set_always_on_top(true);
+    let _ = launcher.set_closable(false);
+    let _ = launcher.set_maximizable(false);
+    let _ = launcher.set_minimizable(false);
+    activate_exam_kiosk(&launcher);
+    start_kiosk_watchdog(app, state);
+
+    enter_exam_mode_ui(app);
+    sync_exam_state_to_launcher(app, &default_exam_overlay_state());
+    sync_exam_loading_state(app, false, "Isi data peserta untuk memulai ujian.");
+
+    apply_macos_exam_presentation_lock(app, true);
+
+    Ok(())
 }
 
 fn parse_overlay_state_from_url(url: &Url) -> Option<ExamOverlayState> {
@@ -438,31 +564,314 @@ fn parse_overlay_state_from_url(url: &Url) -> Option<ExamOverlayState> {
     })
 }
 
-fn sync_overlay_window(exam_window: &WebviewWindow, overlay_window: &WebviewWindow) {
-    if let Ok(pos) = exam_window.outer_position() {
-        let _ = overlay_window.set_position(Position::Physical(PhysicalPosition::new(pos.x, pos.y)));
+fn default_exam_overlay_state() -> ExamOverlayState {
+    ExamOverlayState {
+        session_id: String::new(),
+        display_name: "Peserta".to_string(),
+        deadline_at: String::new(),
+        return_url: format!("https://{RETURN_TO_LAUNCHER_HOST}{RETURN_TO_LAUNCHER_PATH}"),
+        api_base: String::new(),
+    }
+}
+
+fn merge_exam_overlay_state(existing: Option<ExamOverlayState>, incoming: ExamOverlayState) -> ExamOverlayState {
+    let mut merged = existing.unwrap_or_else(default_exam_overlay_state);
+
+    if !incoming.session_id.trim().is_empty() {
+        merged.session_id = incoming.session_id;
+    }
+    if !incoming.display_name.trim().is_empty() {
+        merged.display_name = incoming.display_name;
+    }
+    if !incoming.deadline_at.trim().is_empty() {
+        merged.deadline_at = incoming.deadline_at;
+    }
+    if !incoming.return_url.trim().is_empty() {
+        merged.return_url = incoming.return_url;
+    }
+    if !incoming.api_base.trim().is_empty() {
+        merged.api_base = incoming.api_base;
     }
 
-    if let Ok(size) = exam_window.outer_size() {
-        let width = if size.width < 480 { 480 } else { size.width };
-        let _ = overlay_window.set_size(Size::Physical(PhysicalSize::new(width, 58)));
+    merged
+}
+
+fn sync_exam_loading_state(app: &AppHandle, active: bool, message: &str) {
+    let payload_active = if active { "true" } else { "false" };
+    let payload_message = serde_json::to_string(message).unwrap_or_else(|_| "\"\"".to_string());
+    if let Ok(launcher) = launcher_window(app) {
+        let _ = launcher.eval(&format!(
+            "window.__EXAMUQ_SET_EXAM_LOADING__ && window.__EXAMUQ_SET_EXAM_LOADING__({payload_active}, {payload_message});"
+        ));
+    }
+}
+
+fn sync_exam_state_to_launcher(app: &AppHandle, overlay: &ExamOverlayState) {
+    let payload = serde_json::to_string(overlay).unwrap_or_else(|_| "{}".to_string());
+    if let Ok(launcher) = launcher_window(app) {
+        let _ = launcher.eval(&format!(
+            "window.__EXAMUQ_SYNC_EXAM_STATE__ && window.__EXAMUQ_SYNC_EXAM_STATE__({payload});"
+        ));
+    }
+}
+
+fn enter_exam_mode_ui(app: &AppHandle) {
+    if let Ok(launcher) = launcher_window(app) {
+        let _ = launcher.eval("window.__EXAMUQ_ENTER_EXAM_MODE__ && window.__EXAMUQ_ENTER_EXAM_MODE__();");
+    }
+}
+
+fn store_exam_overlay_state(
+    app: &AppHandle,
+    state: &RuntimeState,
+    overlay: ExamOverlayState,
+) -> Result<ExamOverlayState, String> {
+    let merged = {
+        let mut guard = state.overlay_state.lock().map_err(|_| "State lock error")?;
+        let merged = merge_exam_overlay_state(guard.clone(), overlay);
+        *guard = Some(merged.clone());
+        merged
+    };
+
+    sync_exam_state_to_launcher(app, &merged);
+    Ok(merged)
+}
+
+fn update_overlay_state_from_url(app: &AppHandle, state: &RuntimeState, url: &Url) {
+    if let Some(parsed) = parse_overlay_state_from_url(url) {
+        if let Ok(overlay) = store_exam_overlay_state(app, state, parsed) {
+            ensure_exam_session_heartbeat(app, state, &overlay);
+        }
+    }
+}
+
+fn session_api_url(api_base: &str, session_id: &str, action: &str) -> Result<String, String> {
+    let base = api_base.trim();
+    let session = session_id.trim();
+
+    if base.is_empty() || session.is_empty() {
+        return Err("metadata sesi belum lengkap".to_string());
     }
 
-    let _ = overlay_window.set_always_on_top(true);
-    let _ = overlay_window.set_visible_on_all_workspaces(true);
-    let _ = overlay_window.show();
+    Ok(format!(
+        "{}/api/v1/sessions/{}/{}",
+        base.trim_end_matches('/'),
+        session,
+        action.trim_start_matches('/')
+    ))
+}
+
+fn send_session_heartbeat(overlay: &ExamOverlayState) -> Result<(), String> {
+    let heartbeat_url = session_api_url(&overlay.api_base, &overlay.session_id, "heartbeat")?;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .map_err(|e| format!("gagal membuat HTTP client heartbeat: {e}"))?;
+
+    let response = client
+        .post(&heartbeat_url)
+        .send()
+        .map_err(|e| format!("gagal kirim heartbeat: {e}"))?;
+
+    if response.status().is_success() {
+        return Ok(());
+    }
+
+    Err(format!(
+        "heartbeat ditolak server (status {})",
+        response.status()
+    ))
+}
+
+fn send_session_end(overlay: &ExamOverlayState, reason: &str) -> Result<(), String> {
+    let end_url = session_api_url(&overlay.api_base, &overlay.session_id, "end")?;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("gagal membuat HTTP client end-session: {e}"))?;
+
+    let response = client
+        .post(&end_url)
+        .json(&serde_json::json!({ "reason": reason }))
+        .send()
+        .map_err(|e| format!("gagal mengakhiri sesi: {e}"))?;
+
+    if response.status().is_success() {
+        return Ok(());
+    }
+
+    Err(format!(
+        "end-session ditolak server (status {})",
+        response.status()
+    ))
+}
+
+fn stop_exam_session_heartbeat(state: &RuntimeState) {
+    if let Ok(mut guard) = state.heartbeat_stop_signal.lock() {
+        if let Some(stop_signal) = guard.take() {
+            stop_signal.store(true, Ordering::Relaxed);
+        }
+    }
+
+    if let Ok(mut key_guard) = state.heartbeat_session_key.lock() {
+        *key_guard = None;
+    }
+}
+
+fn ensure_exam_session_heartbeat(app: &AppHandle, state: &RuntimeState, overlay: &ExamOverlayState) {
+    let session_key = format!(
+        "{}|{}",
+        overlay.api_base.trim().to_ascii_lowercase(),
+        overlay.session_id.trim()
+    );
+
+    if overlay.api_base.trim().is_empty() || overlay.session_id.trim().is_empty() {
+        return;
+    }
+
+    if let Ok(existing_key_guard) = state.heartbeat_session_key.lock() {
+        if existing_key_guard.as_deref() == Some(session_key.as_str()) {
+            return;
+        }
+    }
+
+    stop_exam_session_heartbeat(state);
+
+    let stop_signal = Arc::new(AtomicBool::new(false));
+    let loop_stop = Arc::clone(&stop_signal);
+    let loop_overlay = overlay.clone();
+    let app_handle = app.clone();
+
+    thread::spawn(move || {
+        write_runtime_log(
+            &app_handle,
+            &format!(
+                "heartbeat start session={} api_base={}",
+                loop_overlay.session_id, loop_overlay.api_base
+            ),
+        );
+
+        loop {
+            if loop_stop.load(Ordering::Relaxed) {
+                break;
+            }
+
+            if let Err(error) = send_session_heartbeat(&loop_overlay) {
+                write_runtime_log(
+                    &app_handle,
+                    &format!(
+                        "heartbeat warn session={} reason={error}",
+                        loop_overlay.session_id
+                    ),
+                );
+            }
+
+            for _ in 0..10 {
+                if loop_stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                thread::sleep(Duration::from_secs(1));
+            }
+        }
+
+        write_runtime_log(
+            &app_handle,
+            &format!("heartbeat stop session={}", loop_overlay.session_id),
+        );
+    });
+
+    if let Ok(mut guard) = state.heartbeat_stop_signal.lock() {
+        *guard = Some(stop_signal);
+    }
+    if let Ok(mut key_guard) = state.heartbeat_session_key.lock() {
+        *key_guard = Some(session_key);
+    }
+}
+
+fn active_overlay_state(state: &RuntimeState) -> Option<ExamOverlayState> {
+    state.overlay_state.lock().ok().and_then(|guard| guard.clone())
+}
+
+fn end_active_session_if_any(app: &AppHandle, state: &RuntimeState, reason: &str) {
+    let Some(overlay) = active_overlay_state(state) else {
+        return;
+    };
+
+    if overlay.session_id.trim().is_empty() || overlay.api_base.trim().is_empty() {
+        return;
+    }
+
+    if let Err(error) = send_session_end(&overlay, reason) {
+        write_runtime_log(
+            app,
+            &format!(
+                "end-session warn session={} reason={reason} error={error}",
+                overlay.session_id
+            ),
+        );
+    } else {
+        write_runtime_log(
+            app,
+            &format!(
+                "end-session ok session={} reason={reason}",
+                overlay.session_id
+            ),
+        );
+    }
+}
+
+fn resize_exam_webview(app: &AppHandle) -> Result<(), String> {
+    let Some(webview) = app.get_webview(EXAM_WEBVIEW_LABEL) else {
+        return Ok(());
+    };
+
+    let host = launcher_host_window(app)?;
+    let size = host
+        .inner_size()
+        .map_err(|e| format!("Gagal membaca ukuran window ujian: {e}"))?;
+    let scale_factor = host
+        .scale_factor()
+        .map_err(|e| format!("Gagal membaca skala layar ujian: {e}"))?;
+
+    let logical_width = f64::from(size.width) / scale_factor;
+    let logical_height = f64::from(size.height) / scale_factor;
+    let top_bar_height = f64::from(EXAM_TOP_BAR_HEIGHT);
+    let webview_height = (logical_height - top_bar_height).max(1.0);
+
+    webview
+        .set_position(Position::Logical(LogicalPosition::new(0.0, top_bar_height)))
+        .map_err(|e| format!("Gagal mengatur posisi area ujian: {e}"))?;
+    webview
+        .set_size(Size::Logical(LogicalSize::new(logical_width, webview_height)))
+        .map_err(|e| format!("Gagal mengatur ukuran area ujian: {e}"))?;
+    let _ = webview.set_auto_resize(false);
+    let _ = webview.show();
+
+    Ok(())
+}
+
+fn focus_exam_runtime(app: &AppHandle, state: &RuntimeState) {
+    if let Ok(launcher) = launcher_window(app) {
+        ensure_exam_window_kiosk(&launcher);
+        if exam_kiosk_is_active(app, state) {
+            apply_macos_exam_presentation_lock(app, true);
+        }
+    }
+
+    if let Some(webview) = app.get_webview(EXAM_WEBVIEW_LABEL) {
+        let _ = webview.set_focus();
+    }
 }
 
 #[tauri::command]
 fn get_exam_overlay_state(state: State<'_, RuntimeState>) -> Result<ExamOverlayState, String> {
     let guard = state.overlay_state.lock().map_err(|_| "State lock error")?;
-    guard
-        .clone()
-        .ok_or_else(|| "Overlay state belum tersedia.".to_string())
+    Ok(guard.clone().unwrap_or_else(default_exam_overlay_state))
 }
 
 fn open_exam_window(app: &AppHandle, state: &RuntimeState, launch_url: Url) -> Result<(), String> {
-    {
+    let already_in_exam_mode = exam_window_is_locked(state);
+    if !already_in_exam_mode {
         let mut allow_close = state
             .allow_exam_close
             .lock()
@@ -471,78 +880,119 @@ fn open_exam_window(app: &AppHandle, state: &RuntimeState, launch_url: Url) -> R
     }
 
     let launcher = launcher_window(app)?;
-    let _ = launcher.hide();
+    let host_window = launcher_host_window(app)?;
+
+    if let Some(existing_webview) = app.get_webview(EXAM_WEBVIEW_LABEL) {
+        let _ = existing_webview.close();
+    }
 
     {
         let mut overlay = state.overlay_state.lock().map_err(|_| "State lock error")?;
-        *overlay = parse_overlay_state_from_url(&launch_url);
+        *overlay = Some(
+            parse_overlay_state_from_url(&launch_url).unwrap_or_else(default_exam_overlay_state),
+        );
     }
 
-    let exam_window = if let Some(existing) = app.get_webview_window(EXAM_WINDOW_LABEL) {
-        let _ = existing.navigate(launch_url.clone());
-        existing
-    } else {
-        let app_handle = app.clone();
-
-        WebviewWindowBuilder::new(app, EXAM_WINDOW_LABEL, WebviewUrl::External(launch_url.clone()))
-            .title("ExamUQ Client - Ujian")
-            .resizable(false)
-            .fullscreen(false)
-            .decorations(false)
-            .focused(true)
-            .visible(true)
-            .on_navigation(move |url| {
-                if let Some(state) = app_handle.try_state::<RuntimeState>() {
-                    if let Some(overlay) = parse_overlay_state_from_url(url) {
-                        if let Ok(mut guard) = state.overlay_state.lock() {
-                            *guard = Some(overlay);
-                        }
-                    }
-                }
-
-                if !is_return_to_launcher_url(url) {
-                    return true;
-                }
-
-                if let Some(state) = app_handle.try_state::<RuntimeState>() {
-                    let _ = return_to_launcher_runtime(
-                        &app_handle,
-                        &state,
-                        &return_message_from_url(url),
-                    );
-                }
-
-                false
-            })
-            .build()
-            .map_err(|e| format!("Gagal membuka jendela ujian: {e}"))?
-    };
-
-    let overlay_window = if let Some(existing) = app.get_webview_window(OVERLAY_WINDOW_LABEL) {
-        existing
-    } else {
-        WebviewWindowBuilder::new(app, OVERLAY_WINDOW_LABEL, WebviewUrl::App("exam-overlay.html".into()))
-            .title("ExamUQ Overlay")
-            .decorations(false)
-            .resizable(false)
-            .focused(false)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .visible(true)
-            .build()
-            .map_err(|e| format!("Gagal membuka overlay ujian: {e}"))?
-    };
-
-    sync_overlay_window(&exam_window, &overlay_window);
-
-    activate_exam_kiosk(&exam_window);
-
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        let _ = exam_window.set_title("ExamUQ Client - Ujian");
-        let _ = exam_window.show();
-        let _ = exam_window.set_focus();
+    if let Some(overlay) = active_overlay_state(state) {
+        ensure_exam_session_heartbeat(app, state, &overlay);
     }
+
+    enter_exam_mode_ui(app);
+    sync_exam_loading_state(app, true, "Memuat portal ujian...");
+    sync_exam_state_to_launcher(
+        app,
+        &state
+            .overlay_state
+            .lock()
+            .map_err(|_| "State lock error")?
+            .clone()
+            .unwrap_or_else(default_exam_overlay_state),
+    );
+
+    let _ = launcher.set_title("ExamUQ Client - Ujian");
+    let _ = launcher.show();
+    if !already_in_exam_mode {
+        let _ = launcher.set_decorations(false);
+        let _ = launcher.set_resizable(false);
+        let _ = launcher.set_fullscreen(true);
+        let _ = launcher.set_always_on_top(true);
+        let _ = launcher.set_closable(false);
+        let _ = launcher.set_maximizable(false);
+        let _ = launcher.set_minimizable(false);
+        activate_exam_kiosk(&launcher);
+        start_kiosk_watchdog(app, state);
+    } else {
+        let _ = launcher.set_always_on_top(true);
+        let _ = launcher.set_focus();
+    }
+
+    let nav_app = app.clone();
+    let load_app = app.clone();
+    let popup_app = app.clone();
+    let webview_builder = WebviewBuilder::new(EXAM_WEBVIEW_LABEL, WebviewUrl::External(launch_url))
+        .on_navigation(move |url| {
+            if let Some(state) = nav_app.try_state::<RuntimeState>() {
+                update_overlay_state_from_url(&nav_app, &state, url);
+            }
+
+            if !is_return_to_launcher_url(url) {
+                return true;
+            }
+
+            if let Some(state) = nav_app.try_state::<RuntimeState>() {
+                let _ = return_to_launcher_runtime(&nav_app, &state, &return_message_from_url(url));
+            }
+
+            false
+        })
+        .on_page_load(move |_webview, payload| {
+            if let Some(state) = load_app.try_state::<RuntimeState>() {
+                update_overlay_state_from_url(&load_app, &state, payload.url());
+            }
+
+            let message = match payload.event() {
+                PageLoadEvent::Started => "Memuat halaman ujian...",
+                PageLoadEvent::Finished => "Portal ujian siap.",
+            };
+
+            sync_exam_loading_state(&load_app, matches!(payload.event(), PageLoadEvent::Started), message);
+        })
+        .on_new_window(move |url, _features| {
+            if is_return_to_launcher_url(&url) {
+                if let Some(state) = popup_app.try_state::<RuntimeState>() {
+                    let _ = return_to_launcher_runtime(&popup_app, &state, &return_message_from_url(&url));
+                }
+                return NewWindowResponse::Deny;
+            }
+
+            if let Some(webview) = popup_app.get_webview(EXAM_WEBVIEW_LABEL) {
+                let _ = webview.navigate(url.clone());
+            }
+            sync_exam_loading_state(&popup_app, true, "Mengarahkan portal ujian...");
+            NewWindowResponse::Deny
+        });
+
+    let host_size = host_window
+        .inner_size()
+        .map_err(|e| format!("Gagal membaca ukuran host ujian: {e}"))?;
+    let scale_factor = host_window
+        .scale_factor()
+        .map_err(|e| format!("Gagal membaca skala host ujian: {e}"))?;
+    let logical_width = f64::from(host_size.width) / scale_factor;
+    let logical_height = f64::from(host_size.height) / scale_factor;
+    let top_bar_height = f64::from(EXAM_TOP_BAR_HEIGHT);
+    let webview_height = (logical_height - top_bar_height).max(1.0);
+
+    host_window
+        .add_child(
+            webview_builder,
+            LogicalPosition::new(0.0, top_bar_height),
+            LogicalSize::new(logical_width, webview_height),
+        )
+        .map_err(|e| format!("Gagal membuka area ujian: {e}"))?;
+
+    resize_exam_webview(app)?;
+    focus_exam_runtime(app, state);
 
     apply_macos_exam_presentation_lock(app, true);
     #[cfg(target_os = "macos")]
@@ -569,17 +1019,17 @@ fn return_to_launcher_runtime(
         *allow_close = true;
     }
 
+    end_active_session_if_any(app, state, reason);
+    stop_exam_session_heartbeat(state);
+    stop_kiosk_watchdog(state);
+
     {
         let mut overlay = state.overlay_state.lock().map_err(|_| "State lock error")?;
         *overlay = None;
     }
 
-    if let Some(exam_window) = app.get_webview_window(EXAM_WINDOW_LABEL) {
-        let _ = exam_window.close();
-    }
-
-    if let Some(overlay_window) = app.get_webview_window(OVERLAY_WINDOW_LABEL) {
-        let _ = overlay_window.close();
+    if let Some(exam_webview) = app.get_webview(EXAM_WEBVIEW_LABEL) {
+        let _ = exam_webview.close();
     }
 
     restore_launcher_window(&launcher);
@@ -591,6 +1041,35 @@ fn return_to_launcher_runtime(
     write_runtime_log(app, reason);
 
     Ok(())
+}
+
+fn force_return_to_launcher_best_effort(app: &AppHandle, state: &RuntimeState, reason: &str) {
+    if let Ok(mut allow_close) = state.allow_exam_close.lock() {
+        *allow_close = true;
+    }
+
+    end_active_session_if_any(app, state, reason);
+    stop_exam_session_heartbeat(state);
+    stop_kiosk_watchdog(state);
+
+    if let Ok(mut overlay) = state.overlay_state.lock() {
+        *overlay = None;
+    }
+
+    if let Some(exam_webview) = app.get_webview(EXAM_WEBVIEW_LABEL) {
+        let _ = exam_webview.close();
+    }
+
+    if let Ok(launcher) = launcher_window(app) {
+        restore_launcher_window(&launcher);
+        let payload = serde_json::to_string(reason).unwrap_or_else(|_| "\"\"".to_string());
+        let _ = launcher.eval(&format!(
+            "window.__EXAMUQ_RETURN_TO_LAUNCHER__ && window.__EXAMUQ_RETURN_TO_LAUNCHER__({payload});"
+        ));
+    }
+
+    apply_macos_exam_presentation_lock(app, false);
+    write_runtime_log(app, &format!("force-return-to-launcher {reason}"));
 }
 
 fn write_runtime_log(app: &AppHandle, message: &str) {
@@ -610,6 +1089,107 @@ fn write_runtime_log(app: &AppHandle, message: &str) {
     if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = file.write_all(line.as_bytes());
     }
+}
+
+fn stop_kiosk_watchdog(state: &RuntimeState) {
+    if let Ok(mut guard) = state.kiosk_watchdog_stop_signal.lock() {
+        if let Some(stop_signal) = guard.take() {
+            stop_signal.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+fn start_kiosk_watchdog(app: &AppHandle, state: &RuntimeState) {
+    stop_kiosk_watchdog(state);
+
+    let stop_signal = Arc::new(AtomicBool::new(false));
+    let loop_stop = Arc::clone(&stop_signal);
+    let app_handle = app.clone();
+
+    thread::spawn(move || {
+        write_runtime_log(&app_handle, "kiosk-watchdog start");
+
+        loop {
+            if loop_stop.load(Ordering::Relaxed) {
+                break;
+            }
+
+            let Some(state) = app_handle.try_state::<RuntimeState>() else {
+                break;
+            };
+
+            if !exam_kiosk_is_active(&app_handle, &state) {
+                thread::sleep(Duration::from_millis(300));
+                continue;
+            }
+
+            if let Ok(launcher) = launcher_window(&app_handle) {
+                ensure_exam_window_kiosk(&launcher);
+                let _ = launcher.set_always_on_top(true);
+                let _ = launcher.show();
+                let _ = launcher.set_focus();
+            }
+
+            if let Some(exam_webview) = app_handle.get_webview(EXAM_WEBVIEW_LABEL) {
+                let _ = exam_webview.set_focus();
+            }
+
+            apply_macos_exam_presentation_lock(&app_handle, true);
+            thread::sleep(Duration::from_millis(350));
+        }
+
+        write_runtime_log(&app_handle, "kiosk-watchdog stop");
+    });
+
+    if let Ok(mut guard) = state.kiosk_watchdog_stop_signal.lock() {
+        *guard = Some(stop_signal);
+    }
+}
+
+fn close_app_with_session_end_runtime(app: &AppHandle, state: &RuntimeState) -> Result<(), String> {
+    end_active_session_if_any(app, state, "client_secret_close");
+    stop_exam_session_heartbeat(state);
+    stop_kiosk_watchdog(state);
+
+    let exam_window = app.get_webview(EXAM_WEBVIEW_LABEL);
+
+    thread::sleep(Duration::from_millis(END_SESSION_EVAL_DELAY_MS));
+
+    {
+        let mut allow_close = state
+            .allow_exam_close
+            .lock()
+            .map_err(|_| "State lock error")?;
+        *allow_close = true;
+    }
+
+    if let Some(window) = &exam_window {
+        let _ = window.close();
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    if let Some(window) = app.get_webview_window(LAUNCHER_WINDOW_LABEL) {
+        let _ = window.set_always_on_top(false);
+        let _ = window.set_content_protected(false);
+        let _ = window.set_skip_taskbar(false);
+        let _ = window.set_fullscreen(false);
+    }
+
+    set_android_exam_lock(app, false);
+
+    #[cfg(target_os = "windows")]
+    restore_windows_explorer();
+
+    apply_macos_exam_presentation_lock(app, false);
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.set_activation_policy(ActivationPolicy::Regular);
+        let _ = app.set_dock_visibility(true);
+    }
+
+    app.exit(0);
+    Ok(())
 }
 
 #[cfg(target_os = "android")]
@@ -710,8 +1290,18 @@ fn activate_exam_kiosk(window: &WebviewWindow) {
 fn restore_launcher_window(window: &WebviewWindow) {
     let _ = window.set_always_on_top(false);
     let _ = window.set_fullscreen(false);
+    let _ = window.set_decorations(true);
+    let _ = window.set_resizable(false);
+    let _ = window.set_closable(true);
+    let _ = window.set_maximizable(false);
+    let _ = window.set_minimizable(false);
     let _ = window.set_content_protected(false);
     let _ = window.set_skip_taskbar(false);
+    let _ = window.set_size(Size::Physical(PhysicalSize::new(
+        LAUNCHER_WINDOW_WIDTH,
+        LAUNCHER_WINDOW_HEIGHT,
+    )));
+    let _ = window.center();
     let _ = window.show();
     let _ = window.set_focus();
     let _ = window.set_title("ExamUQ Client");
@@ -776,7 +1366,7 @@ fn open_admin(state: State<'_, RuntimeState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn open_exam_direct(
+async fn open_exam_direct(
     app: AppHandle,
     state: State<'_, RuntimeState>,
     server_base_url: Option<String>,
@@ -809,72 +1399,22 @@ fn open_exam_direct(
 
 #[tauri::command]
 fn finish_exam_session(app: AppHandle, state: State<'_, RuntimeState>) -> Result<(), String> {
-    return_to_launcher_runtime(&app, &state, "finish_exam_session invoked")
+    if let Err(error) = return_to_launcher_runtime(&app, &state, "finish_exam_session invoked") {
+        write_runtime_log(
+            &app,
+            &format!("finish_exam_session fallback_return reason={error}"),
+        );
+        force_return_to_launcher_best_effort(&app, &state, "finish_exam_session fallback");
+    }
+
+    Ok(())
 }
 
 async fn close_app_with_session_end(
     app: &AppHandle,
     state: &State<'_, RuntimeState>,
 ) -> Result<(), String> {
-    let exam_window = app.get_webview_window(EXAM_WINDOW_LABEL);
-
-    let end_script = r#"
-      (async () => {
-        const cfg = document.getElementById('playerConfig');
-        const sessionId = cfg?.dataset?.sessionId;
-        if (!sessionId) return;
-
-        try {
-          await fetch('/api/v1/sessions/' + sessionId + '/end', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Accept': 'application/json'
-            },
-            body: JSON.stringify({ reason: 'client_secret_close' })
-          });
-        } catch (_e) {
-        }
-      })();
-    "#;
-
-    if let Some(window) = &exam_window {
-        let _ = window.eval(end_script);
-    }
-
-    thread::sleep(Duration::from_millis(END_SESSION_EVAL_DELAY_MS));
-
-    {
-        let mut allow_close = state
-            .allow_exam_close
-            .lock()
-            .map_err(|_| "State lock error")?;
-        *allow_close = true;
-    }
-
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    if let Some(window) = &exam_window {
-        let _ = window.set_always_on_top(false);
-        let _ = window.set_content_protected(false);
-        let _ = window.set_skip_taskbar(false);
-        let _ = window.set_fullscreen(false);
-    }
-
-    set_android_exam_lock(app, false);
-
-    #[cfg(target_os = "windows")]
-    restore_windows_explorer();
-
-    apply_macos_exam_presentation_lock(app, false);
-
-    #[cfg(target_os = "macos")]
-    {
-        let _ = app.set_activation_policy(ActivationPolicy::Regular);
-        let _ = app.set_dock_visibility(true);
-    }
-
-    app.exit(0);
-    Ok(())
+    close_app_with_session_end_runtime(app, state)
 }
 
 #[tauri::command]
@@ -894,14 +1434,64 @@ async fn start_exam(
         );
     }
 
+    let server_base_url = {
+        let guard = state.client_state.lock().map_err(|_| "State lock error")?;
+        guard.server_base_url.clone()
+    };
+
+    write_runtime_log(&app, "start_exam enter_exam_mode_runtime");
+    enter_exam_mode_runtime(&app, &state)?;
+
+    Ok(StartExamResponse {
+        ok: true,
+        server_base_url,
+    })
+}
+
+#[tauri::command]
+async fn launch_exam_from_client(
+    app: AppHandle,
+    state: State<'_, RuntimeState>,
+    payload: StartExamPayload,
+) -> Result<StartExamResponse, String> {
+    if !android_permissions_are_ready(&app) {
+        write_runtime_log(
+            &app,
+            "launch_exam_from_client: permission marker false; continue and defer enforcement to native gate",
+        );
+    }
+
+    let display_name = payload.display_name.trim().to_string();
+    let class_room = payload.class_room.trim().to_string();
+    let token_global = payload.token_global.trim().to_string();
+
+    if display_name.is_empty() {
+        return Err("Nama peserta wajib diisi.".to_string());
+    }
+    if class_room.is_empty() {
+        return Err("Kelas wajib diisi.".to_string());
+    }
+    if token_global.is_empty() {
+        return Err("Token ujian wajib diisi.".to_string());
+    }
+
+    let normalized_payload = StartExamPayload {
+        display_name,
+        class_room,
+        token_global,
+    };
+
     let (server_base_url, device_id) = {
         let guard = state.client_state.lock().map_err(|_| "State lock error")?;
         (guard.server_base_url.clone(), guard.device_id.clone())
     };
 
-    let launch_url = build_exam_launch_url(&server_base_url, &device_id)?;
+    let launch_url = request_launch_from_backend(&server_base_url, &device_id, &normalized_payload)?;
     let launch_url_string = launch_url.to_string();
-    write_runtime_log(&app, &format!("start_exam launch_url={launch_url_string}"));
+    write_runtime_log(
+        &app,
+        &format!("launch_exam_from_client launch_url={launch_url_string}"),
+    );
 
     open_exam_window(&app, &state, launch_url)?;
 
@@ -925,6 +1515,22 @@ pub fn run() {
                 }
 
                 if let Some(state) = app.try_state::<RuntimeState>() {
+                    let secret_shortcut_ids = [
+                        Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyX).id(),
+                        #[cfg(target_os = "macos")]
+                        Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyX).id(),
+                    ];
+
+                    if secret_shortcut_ids
+                        .into_iter()
+                        .any(|shortcut_id| shortcut.id() == shortcut_id)
+                    {
+                        if exam_kiosk_is_active(app, &state) {
+                            let _ = close_app_with_session_end_runtime(app, &state);
+                        }
+                        return;
+                    }
+
                     if [
                         Code::F1,
                         Code::F2,
@@ -942,12 +1548,15 @@ pub fn run() {
                     .into_iter()
                     .any(|code| shortcut.id() == Shortcut::new(None, code).id())
                     {
-                        if let Some(exam_window) = app.get_webview_window(EXAM_WINDOW_LABEL) {
-                            ensure_exam_window_kiosk(&exam_window);
+                        if let Ok(launcher) = launcher_window(app) {
+                            ensure_exam_window_kiosk(&launcher);
                             if exam_kiosk_is_active(app, &state) {
                                 apply_macos_exam_presentation_lock(app, true);
                             }
-                            let _ = exam_window.set_focus();
+                            let _ = launcher.set_focus();
+                        }
+                        if let Some(exam_webview) = app.get_webview(EXAM_WEBVIEW_LABEL) {
+                            let _ = exam_webview.set_focus();
                         }
                         return;
                     }
@@ -962,19 +1571,25 @@ pub fn run() {
                         .into_iter()
                         .any(|shortcut_id| shortcut.id() == shortcut_id)
                     {
-                        if let Some(exam_window) = app.get_webview_window(EXAM_WINDOW_LABEL) {
-                            ensure_exam_window_kiosk(&exam_window);
-                            let _ = exam_window.set_focus();
+                        if let Ok(launcher) = launcher_window(app) {
+                            ensure_exam_window_kiosk(&launcher);
+                            let _ = launcher.set_focus();
+                        }
+                        if let Some(exam_webview) = app.get_webview(EXAM_WEBVIEW_LABEL) {
+                            let _ = exam_webview.set_focus();
                         }
                         return;
                     }
 
                     if shortcut.id() == Shortcut::new(None, Code::Escape).id() {
                         if exam_kiosk_is_active(app, &state) {
-                            if let Some(exam_window) = app.get_webview_window(EXAM_WINDOW_LABEL) {
-                                ensure_exam_window_kiosk(&exam_window);
+                            if let Ok(launcher) = launcher_window(app) {
+                                ensure_exam_window_kiosk(&launcher);
                                 apply_macos_exam_presentation_lock(app, true);
-                                let _ = exam_window.set_focus();
+                                let _ = launcher.set_focus();
+                            }
+                            if let Some(exam_webview) = app.get_webview(EXAM_WEBVIEW_LABEL) {
+                                let _ = exam_webview.set_focus();
                             }
                         }
                         return;
@@ -986,10 +1601,6 @@ pub fn run() {
                             &state,
                             "global shortcut emergency return invoked",
                         );
-
-                        if let Some(exam_window) = app.get_webview_window(EXAM_WINDOW_LABEL) {
-                            let _ = exam_window.set_focus();
-                        }
                     }
                 }
             })
@@ -1030,6 +1641,9 @@ pub fn run() {
                 client_state: Mutex::new(loaded),
                 allow_exam_close: Mutex::new(true),
                 overlay_state: Mutex::new(None),
+                heartbeat_stop_signal: Mutex::new(None),
+                heartbeat_session_key: Mutex::new(None),
+                kiosk_watchdog_stop_signal: Mutex::new(None),
             });
 
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1075,41 +1689,22 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if window.label() != EXAM_WINDOW_LABEL && window.label() != OVERLAY_WINDOW_LABEL {
+            if window.label() != LAUNCHER_WINDOW_LABEL {
                 return;
             }
 
-            if window.label() == OVERLAY_WINDOW_LABEL {
+            let should_sync_exam = matches!(event, WindowEvent::Resized(_) | WindowEvent::Moved(_));
+            if should_sync_exam {
                 if let Some(state) = window.try_state::<RuntimeState>() {
                     if exam_kiosk_is_active(&window.app_handle(), &state) {
-                        if let Some(overlay_window) = window.app_handle().get_webview_window(OVERLAY_WINDOW_LABEL) {
-                            let _ = overlay_window.show();
+                        let _ = resize_exam_webview(&window.app_handle());
+                        if let Ok(launcher) = launcher_window(&window.app_handle()) {
+                            ensure_exam_window_kiosk(&launcher);
                         }
-                    }
-                }
-
-                if let WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                }
-
-                return;
-            }
-
-            let should_sync_overlay = matches!(event, WindowEvent::Resized(_) | WindowEvent::Moved(_));
-            if should_sync_overlay {
-                if let Some(state) = window.try_state::<RuntimeState>() {
-                    if exam_kiosk_is_active(&window.app_handle(), &state) {
-                        if let Some(exam_window) =
-                            window.app_handle().get_webview_window(EXAM_WINDOW_LABEL)
-                        {
-                            ensure_exam_window_kiosk(&exam_window);
-                            apply_macos_exam_presentation_lock(&window.app_handle(), true);
-                            if let Some(overlay_window) =
-                                window.app_handle().get_webview_window(OVERLAY_WINDOW_LABEL)
-                            {
-                                sync_overlay_window(&exam_window, &overlay_window);
-                            }
+                        if let Some(exam_webview) = window.app_handle().get_webview(EXAM_WEBVIEW_LABEL) {
+                            let _ = exam_webview.set_focus();
                         }
+                        apply_macos_exam_presentation_lock(&window.app_handle(), true);
                     }
                 }
             }
@@ -1127,26 +1722,14 @@ pub fn run() {
             if let WindowEvent::Focused(false) = event {
                 if let Some(state) = window.try_state::<RuntimeState>() {
                     if exam_kiosk_is_active(&window.app_handle(), &state) {
-                        if let Some(overlay_window) =
-                            window.app_handle().get_webview_window(OVERLAY_WINDOW_LABEL)
-                        {
-                            if matches!(overlay_window.is_focused(), Ok(true)) {
-                                return;
-                            }
-                        }
-
-                        if let Some(exam_window) =
-                            window.app_handle().get_webview_window(EXAM_WINDOW_LABEL)
-                        {
-                            ensure_exam_window_kiosk(&exam_window);
+                        if let Ok(launcher) = launcher_window(&window.app_handle()) {
+                            ensure_exam_window_kiosk(&launcher);
                             apply_macos_exam_presentation_lock(&window.app_handle(), true);
                             #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                            let _ = exam_window.set_focus();
-                            if let Some(overlay_window) =
-                                window.app_handle().get_webview_window(OVERLAY_WINDOW_LABEL)
-                            {
-                                sync_overlay_window(&exam_window, &overlay_window);
-                            }
+                            let _ = launcher.set_focus();
+                        }
+                        if let Some(exam_webview) = window.app_handle().get_webview(EXAM_WEBVIEW_LABEL) {
+                            let _ = exam_webview.set_focus();
                         }
                     }
                 }
@@ -1157,6 +1740,7 @@ pub fn run() {
             update_settings,
             open_admin,
             start_exam,
+            launch_exam_from_client,
             open_exam_direct,
             finish_exam_session,
             get_exam_overlay_state,
@@ -1178,9 +1762,12 @@ pub fn run() {
                 return;
             }
 
-            if let Some(exam_window) = app_handle.get_webview_window(EXAM_WINDOW_LABEL) {
+            if let Ok(launcher) = launcher_window(app_handle) {
                 api.prevent_exit();
-                ensure_exam_window_kiosk(&exam_window);
+                ensure_exam_window_kiosk(&launcher);
+                if let Some(exam_webview) = app_handle.get_webview(EXAM_WEBVIEW_LABEL) {
+                    let _ = exam_webview.set_focus();
+                }
                 apply_macos_exam_presentation_lock(app_handle, true);
             }
         }
